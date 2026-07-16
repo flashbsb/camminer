@@ -1,0 +1,20 @@
+# Configs containing camera credentials
+config/scan.cfg
+config/user.cfg
+
+# Local output reports
+infos/
+
+# Python caching & environment
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+venv/
+.pytest_cache/
+
+# External development environments
+../d-camminer/
+d-camminer/

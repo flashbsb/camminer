@@ -1,0 +1,29 @@
+{
+  "timeout": 3.0,
+  "threads": 20,
+  "scan_ports": [554, 8554, 80, 8080, 8888, 5000, 3702],
+  "common_rtsp_paths": [
+    "/11",
+    "/12",
+    "/stream1",
+    "/stream2",
+    "/live/ch00_1",
+    "/live/ch0",
+    "/live/ch1",
+    "/onvif1",
+    "/onvif2",
+    "/h264",
+    "/mpeg4",
+    "/video1",
+    "/video2",
+    "/cam/realmonitor?channel=1&subtype=0",
+    "/cam/realmonitor?channel=1&subtype=1",
+    "/Streaming/Channels/101",
+    "/Streaming/Channels/102",
+    "/Streaming/Channels/1",
+    "/Streaming/Channels/2",
+    "/user={username}_password={password}_channel=1_stream=0&amponvif=0.sdp?real_st",
+    "/user={username}_password={password}_channel=1_stream=1&amponvif=0.sdp?real_st"
+  ],
+  "default_output_dir": "infos"
+}
