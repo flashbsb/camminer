@@ -12,6 +12,9 @@ import re
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Set global default socket timeout to prevent indefinite urllib or socket hangs
+socket.setdefaulttimeout(4.0)
+
 def get_ws_security_header(username, password):
     """
     Generates a WS-Security header using Digest authentication.
@@ -176,6 +179,69 @@ def check_digest_auth(rtsp_url, username, password, www_auth_header, timeout=1.5
         return "RTSP/1.0 200" in response
     except Exception:
         return False
+
+def authenticate_rtsp_url(rtsp_url, credentials, timeout=1.5):
+    """
+    Tries different credentials on an RTSP URL. Returns the verified URL with working credentials,
+    or (None, None) if none of the credentials work.
+    """
+    # 1. First check if it works without credentials
+    status, auth_header, response = verify_rtsp_url_raw(rtsp_url, timeout=timeout)
+    if status == "valid":
+        return rtsp_url, ("", "")
+        
+    if status != "unauthorized" or not response:
+        # If it's a 404 or connection error, no credentials can fix it
+        return None, None
+        
+    parsed = urlparse(rtsp_url)
+    host = parsed.hostname
+    port = parsed.port or 554
+    path = parsed.path
+    if parsed.query:
+        path += "?" + parsed.query
+        
+    # Extract WWW-Authenticate header
+    www_auth = ""
+    for line in response.split("\n"):
+        if "www-authenticate" in line.lower():
+            www_auth = line
+            break
+            
+    # Try each credential pair
+    for user, pwd in credentials:
+        # 1. Try Basic Auth
+        userpass = f"{user}:{pwd}"
+        auth_b64 = base64.b64encode(userpass.encode('utf-8')).decode('utf-8')
+        auth_header = f"Authorization: Basic {auth_b64}\r\n"
+        
+        req = (
+            f"DESCRIBE rtsp://{host}:{port}{path} RTSP/1.0\r\n"
+            f"CSeq: 2\r\n"
+            f"User-Agent: Antigravity-CamMiner/1.0\r\n"
+            f"{auth_header}"
+            f"Accept: application/sdp\r\n\r\n"
+        )
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect((host, port))
+            sock.sendall(req.encode('utf-8'))
+            resp = sock.recv(2048).decode('utf-8', errors='ignore')
+            sock.close()
+            if "RTSP/1.0 200" in resp:
+                # Basic Auth succeeded! Return URL with credentials embedded
+                return f"rtsp://{user}:{pwd}@{host}:{port}{path}", (user, pwd)
+        except Exception:
+            pass
+            
+        # 2. Try Digest Auth if challenge present
+        if www_auth and "digest" in www_auth.lower():
+            if check_digest_auth(rtsp_url, user, pwd, www_auth, timeout=timeout):
+                # Digest Auth succeeded! Return URL with credentials embedded
+                return f"rtsp://{user}:{pwd}@{host}:{port}{path}", (user, pwd)
+                
+    return None, None
 
 class CameraProber:
     def __init__(self, ip, open_ports, credentials, settings):
@@ -400,12 +466,56 @@ class CameraProber:
                         if uri_elems:
                             rtsp_url = uri_elems[0].text
                             
-                            # Embed credentials into the RTSP URL if the URL doesn't have them
-                            if self.auth_success[0] and "@" not in rtsp_url:
+                            # Embed credentials into the RTSP URL
+                            rtsp_cred_user = self.auth_success[0] if (self.auth_success and self.auth_success[0]) else None
+                            rtsp_cred_pwd = self.auth_success[1] if (self.auth_success and self.auth_success[1]) else None
+                            
+                            # Try ONVIF credentials first if they exist
+                            if rtsp_cred_user and "@" not in rtsp_url:
                                 parts = rtsp_url.split("://", 1)
                                 if len(parts) == 2:
-                                    rtsp_url = f"{parts[0]}://{self.auth_success[0]}:{self.auth_success[1]}@{parts[1]}"
+                                    test_url = f"{parts[0]}://{rtsp_cred_user}:{rtsp_cred_pwd}@{parts[1]}"
+                                    status, _, _ = verify_rtsp_url_raw(test_url, timeout=1.0)
+                                    if status == "valid":
+                                        rtsp_url = test_url
+                                        
+                            # If still unauthenticated or anonymous check fails, try all passwords from user.cfg
+                            status, _, _ = verify_rtsp_url_raw(rtsp_url, timeout=1.0)
+                            if status != "valid":
+                                verified_url, working_cred = authenticate_rtsp_url(rtsp_url, self.credentials)
+                                if verified_url:
+                                    rtsp_url = verified_url
+                                    self.auth_success = working_cred
                                     
+                            # Request Snapshot URI
+                            soap_snapshot = f"""
+                            <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">
+                              <s:Header>{sec_header}</s:Header>
+                              <s:Body xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
+                                <trt:GetSnapshotUri>
+                                  <trt:ProfileToken>{token}</trt:ProfileToken>
+                                </trt:GetSnapshotUri>
+                              </s:Body>
+                            </s:Envelope>
+                            """
+                            res_snap = send_soap_request(media_service_url, soap_snapshot, timeout=self.timeout)
+                            snapshot_url = "None"
+                            if res_snap is not None:
+                                try:
+                                    root_snap = ET.fromstring(res_snap)
+                                    snap_elems = find_xml_elements(root_snap, "Uri")
+                                    if snap_elems:
+                                        snapshot_url = snap_elems[0].text
+                                        # Embed credentials into the Snapshot HTTP URL if needed
+                                        snap_cred_user = self.auth_success[0] if (self.auth_success and self.auth_success[0]) else None
+                                        snap_cred_pwd = self.auth_success[1] if (self.auth_success and self.auth_success[1]) else None
+                                        if snap_cred_user and "@" not in snapshot_url and "http" in snapshot_url:
+                                            parts = snapshot_url.split("://", 1)
+                                            if len(parts) == 2:
+                                                snapshot_url = f"{parts[0]}://{snap_cred_user}:{snap_cred_pwd}@{parts[1]}"
+                                except Exception:
+                                    pass
+
                             # Classify stream types dynamically
                             # Check resolution details if present in the profile XML
                             width = ""
@@ -414,6 +524,29 @@ class CameraProber:
                             h_elems = find_xml_elements(profile, "Height")
                             if w_elems: width = w_elems[0].text
                             if h_elems: height = h_elems[0].text
+                            
+                            # Parse fallback codec, fps, audio details from ONVIF profile configurations
+                            codec = "Unknown"
+                            fps = "Unknown"
+                            audio = "Unknown"
+                            
+                            video_conf = find_xml_elements(profile, "VideoEncoderConfiguration")
+                            if video_conf:
+                                v_enc = find_xml_elements(video_conf[0], "Encoding")
+                                if v_enc:
+                                    codec = v_enc[0].text.upper()
+                                v_fps = find_xml_elements(video_conf[0], "FrameRateLimit")
+                                if v_fps:
+                                    try:
+                                        fps = int(float(v_fps[0].text))
+                                    except Exception:
+                                        pass
+                                        
+                            audio_conf = find_xml_elements(profile, "AudioEncoderConfiguration")
+                            if audio_conf:
+                                a_enc = find_xml_elements(audio_conf[0], "Encoding")
+                                if a_enc:
+                                    audio = a_enc[0].text.upper()
                             
                             stream_type = "main" if i == 0 else "substream"
                             if i > 1:
@@ -424,17 +557,20 @@ class CameraProber:
                                 "name": name_str,
                                 "token": token,
                                 "resolution": f"{width}x{height}" if width and height else "Unknown",
-                                "codec": "Unknown",
-                                "fps": "Unknown",
-                                "audio": "Unknown"
+                                "codec": codec,
+                                "fps": fps,
+                                "audio": audio,
+                                "snapshot_url": snapshot_url
                             }
                             print(f"    - {stream_type.capitalize()} stream URL resolved: {rtsp_url}")
+                            if snapshot_url != "None":
+                                print(f"    - {stream_type.capitalize()} snapshot URL resolved: {snapshot_url}")
                 return True
             except Exception as e:
                 print(f"  [-] Error parsing profiles: {e}", file=sys.stderr)
         
         return False
-
+ 
     def add_brute_forced_stream(self, rtsp_url, credentials):
         self.auth_success = credentials
         stype = "main" if len(self.streams) == 0 else f"substream_{len(self.streams)}"
@@ -448,7 +584,8 @@ class CameraProber:
             "resolution": "Unknown",
             "codec": "Unknown",
             "fps": "Unknown",
-            "audio": "Unknown"
+            "audio": "Unknown",
+            "snapshot_url": "None"
         }
         user, pwd = credentials
         cred_desc = f"'{user}:{pwd}'" if user else "No Authentication"

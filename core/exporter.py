@@ -410,6 +410,7 @@ def export_html(output_path, camera_reports, perf_reports=None):
         .badge-success {{ background-color: rgba(16, 185, 129, 0.15); color: var(--success); }}
         .badge-warning {{ background-color: rgba(245, 158, 11, 0.15); color: var(--warning); }}
         .badge-error {{ background-color: rgba(239, 68, 68, 0.15); color: var(--error); }}
+        .badge-info {{ background-color: rgba(99, 102, 241, 0.15); color: var(--primary-light); }}
 
         /* Compatibility Bar */
         .score-bar-container {{
@@ -451,6 +452,26 @@ def export_html(output_path, camera_reports, perf_reports=None):
             overflow: hidden;
             text-overflow: ellipsis;
             max-width: 320px;
+        }}
+
+        .url-code {{
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            word-break: break-all;
+            white-space: normal !important;
+            user-select: all;
+            cursor: pointer;
+            background-color: rgba(255, 255, 255, 0.05);
+            padding: 0.15rem 0.35rem;
+            border-radius: 4px;
+            display: inline-block;
+            max-width: 100%;
+            transition: color 0.15s ease, background-color 0.15s ease;
+        }}
+
+        .url-code:hover {{
+            background-color: rgba(255, 255, 255, 0.12);
+            color: var(--primary-light);
         }}
 
         /* Recommendation Section */
@@ -626,11 +647,19 @@ def export_html(output_path, camera_reports, perf_reports=None):
         main_codec = main_stream.get("codec", "N/A")
         main_fps = main_stream.get("fps", "N/A")
         main_url = main_stream.get("url", "")
+        main_snap = main_stream.get("snapshot_url", "None")
+        main_snap_html = ""
+        if main_snap and main_snap != "None":
+            main_snap_html = f'<li style="white-space: normal !important; max-width: 320px; margin-top:0.25rem;">Snapshot: <code class="url-code" onclick="copyToClipboard(\'{main_snap}\', this)" title="Click to copy snapshot URL">{main_snap}</code></li>'
         
         sub_res = sub_stream.get("resolution", "N/A")
         sub_codec = sub_stream.get("codec", "N/A")
         sub_fps = sub_stream.get("fps", "N/A")
         sub_url = sub_stream.get("url", "")
+        sub_snap = sub_stream.get("snapshot_url", "None")
+        sub_snap_html = ""
+        if sub_snap and sub_snap != "None":
+            sub_snap_html = f'<li style="white-space: normal !important; max-width: 320px; margin-top:0.25rem;">Snapshot: <code class="url-code" onclick="copyToClipboard(\'{sub_snap}\', this)" title="Click to copy snapshot URL">{sub_snap}</code></li>'
         
         # Performance info
         perf_html = "<i>No Performance Test Run</i>"
@@ -680,7 +709,9 @@ def export_html(output_path, camera_reports, perf_reports=None):
                             <li>Res: <b>{main_res}</b></li>
                             <li>Codec: {main_codec}</li>
                             <li>Nominal: {main_fps} FPS</li>
-                            <li title="{main_url}">URL: <span style="font-size:0.75rem">{main_url[:35]}...</span></li>
+                            <li>Token: <span class="badge badge-info">{main_stream.get('token', 'N/A')}</span></li>
+                            <li style="white-space: normal !important; max-width: 320px;">URL: <code class="url-code" onclick="copyToClipboard('{main_url}', this)" title="Click to copy full RTSP URL">{main_url}</code></li>
+                            {main_snap_html}
                         </ul>
                     </td>
                     <td>
@@ -688,7 +719,9 @@ def export_html(output_path, camera_reports, perf_reports=None):
                             <li>Res: <b>{sub_res}</b></li>
                             <li>Codec: {sub_codec}</li>
                             <li>Nominal: {sub_fps} FPS</li>
-                            <li title="{sub_url}">URL: <span style="font-size:0.75rem">{sub_url[:35]}...</span></li>
+                            <li>Token: <span class="badge badge-info">{sub_stream.get('token', 'N/A')}</span></li>
+                            <li style="white-space: normal !important; max-width: 320px;">URL: <code class="url-code" onclick="copyToClipboard('{sub_url}', this)" title="Click to copy full RTSP URL">{sub_url}</code></li>
+                            {sub_snap_html}
                         </ul>
                     </td>
                     <td>
@@ -718,6 +751,20 @@ def export_html(output_path, camera_reports, perf_reports=None):
     </div>
 
     <script>
+        function copyToClipboard(text, el) {{
+            navigator.clipboard.writeText(text).then(() => {{
+                const originalText = el.innerText;
+                el.innerText = "Copied!";
+                el.style.color = "#10b981"; // var(--success)
+                setTimeout(() => {{
+                    el.innerText = originalText;
+                    el.style.color = "";
+                }}, 1200);
+            }}).catch(err => {{
+                console.error("Failed to copy: ", err);
+            }});
+        }}
+
         // Filters the table displays
         function filterTable(status) {{
             const rows = document.querySelectorAll("#camTableBody tr");
@@ -812,7 +859,364 @@ def export_html(output_path, camera_reports, perf_reports=None):
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(html_content)
         print(f"[+] HTML Dashboard report exported successfully to: {output_path}")
+        
+        # Rebuild index.html archive page in the same folder
+        update_index_html(os.path.dirname(output_path))
+        
         return True
     except Exception as e:
         print(f"[-] Failed to export HTML dashboard: {e}", file=sys.stderr)
+        return False
+
+def update_index_html(output_dir):
+    """
+    Scans output_dir for JSON and HTML reports, parses summaries, and builds/updates an index.html index file.
+    """
+    import glob
+    print("[*] Rebuilding index.html archive page in output directory...")
+    
+    # 1. Load details from JSON reports
+    search_pattern = os.path.join(output_dir, "scan_report_*.json")
+    json_files = glob.glob(search_pattern)
+    
+    scans_history = []
+    processed_html_files = set()
+    
+    for jpath in json_files:
+        try:
+            with open(jpath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                
+            scan_time_str = data.get("scan_time", "")
+            try:
+                dt = datetime.fromisoformat(scan_time_str)
+                formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                base = os.path.basename(jpath)
+                parts = base.split("_")
+                if len(parts) >= 4:
+                    date_part = parts[2]
+                    time_part = parts[3].split(".")[0]
+                    formatted_time = f"{date_part[0:4]}-{date_part[4:6]}-{date_part[6:8]} {time_part[0:2]}:{time_part[2:4]}:{time_part[4:6]}"
+                else:
+                    formatted_time = "Unknown"
+                    
+            cameras = data.get("cameras", [])
+            total_cams = len(cameras)
+            active_cams = sum(1 for c in cameras if c.get("streams"))
+            
+            avg_score = 0
+            if total_cams > 0:
+                avg_score = round(sum(c.get("nvr_score", 0) for c in cameras) / total_cams)
+                
+            ips = [c.get("ip") for c in cameras]
+            ips_str = ", ".join(ips)
+            
+            base_name = os.path.basename(jpath).replace(".json", ".html")
+            html_path = base_name
+            
+            if os.path.exists(os.path.join(output_dir, base_name)):
+                scans_history.append({
+                    "time": formatted_time,
+                    "raw_time": scan_time_str,
+                    "total": f"{total_cams}",
+                    "active": f"{active_cams}",
+                    "score": avg_score,
+                    "ips": ips_str,
+                    "link": html_path
+                })
+                processed_html_files.add(base_name)
+        except Exception as e:
+            print(f"[-] Warning: Failed to parse history from {jpath}: {e}", file=sys.stderr)
+            
+    # 2. Check for legacy HTML reports that don't have matching JSON files
+    search_pattern_html = os.path.join(output_dir, "scan_report_*.html")
+    html_files = glob.glob(search_pattern_html)
+    
+    for hpath in html_files:
+        base_name = os.path.basename(hpath)
+        if base_name not in processed_html_files:
+            formatted_time = "Unknown"
+            raw_time_fallback = base_name
+            
+            parts = base_name.split("_")
+            if len(parts) >= 4:
+                date_part = parts[2]
+                time_part = parts[3].split(".")[0]
+                formatted_time = f"{date_part[0:4]}-{date_part[4:6]}-{date_part[6:8]} {time_part[0:2]}:{time_part[2:4]}:{time_part[4:6]}"
+                raw_time_fallback = f"{date_part[0:4]}-{date_part[4:6]}-{date_part[6:8]}T{time_part[0:2]}:{time_part[2:4]}:{time_part[4:6]}"
+                
+            scans_history.append({
+                "time": formatted_time,
+                "raw_time": raw_time_fallback,
+                "total": "N/A",
+                "active": "N/A",
+                "score": "N/A",
+                "ips": "Legacy Report (No JSON Metadata)",
+                "link": base_name
+            })
+            
+    scans_history.sort(key=lambda x: x.get("raw_time", ""), reverse=True)
+    
+    total_scans = len(scans_history)
+    last_scan = scans_history[0]["time"] if total_scans > 0 else "N/A"
+    
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CamMiner - Scan Reports Archive</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {{
+            --bg-color: #0d0f12;
+            --surface-color: #161a22;
+            --surface-hover: #1e2430;
+            --primary: #4f46e5;
+            --primary-light: #6366f1;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --text-main: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --border-color: #2d3748;
+        }}
+
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+
+        body {{
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.5;
+            padding: 2rem;
+        }}
+
+        header {{
+            margin-bottom: 2rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 1.5rem;
+        }}
+
+        header h1 {{
+            font-size: 2.2rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #a5b4fc, #6366f1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }}
+
+        header p {{
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            margin-top: 0.25rem;
+        }}
+
+        .summary-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2.5rem;
+        }}
+
+        .card {{
+            background-color: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+        }}
+
+        .card::before {{
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background-color: var(--primary);
+        }}
+
+        .card-title {{
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }}
+
+        .card-value {{
+            font-size: 2.2rem;
+            font-weight: 700;
+        }}
+
+        .table-container {{
+            background-color: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }}
+
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }}
+
+        th {{
+            background-color: rgba(255, 255, 255, 0.02);
+            border-bottom: 2px solid var(--border-color);
+            padding: 1rem 1.25rem;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+        }}
+
+        td {{
+            padding: 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.95rem;
+        }}
+
+        tr {{
+            transition: background-color 0.15s ease;
+        }}
+
+        tr:hover {{
+            background-color: var(--surface-hover);
+        }}
+
+        .badge {{
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }}
+
+        .badge-success {{ background-color: rgba(16, 185, 129, 0.15); color: var(--success); }}
+        .badge-warning {{ background-color: rgba(245, 158, 11, 0.15); color: var(--warning); }}
+        .badge-error {{ background-color: rgba(239, 68, 68, 0.15); color: var(--error); }}
+
+        .btn {{
+            display: inline-block;
+            background-color: var(--primary);
+            color: var(--text-main);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: background-color 0.2s ease;
+            border: 1px solid var(--primary);
+            cursor: pointer;
+        }}
+
+        .btn:hover {{
+            background-color: var(--primary-light);
+            border-color: var(--primary-light);
+        }}
+
+        .mono-text {{
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }}
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>CamMiner Reports Archive</h1>
+        <p>Archive of compiled camera scan assessments and NVR readiness metrics</p>
+    </header>
+
+    <div class="summary-grid">
+        <div class="card">
+            <div class="card-title">Total Scans in History</div>
+            <div class="card-value">{total_scans}</div>
+        </div>
+        <div class="card">
+            <div class="card-title">Latest Run Time</div>
+            <div class="card-value" style="font-size: 1.5rem; margin-top: 0.75rem;">{last_scan}</div>
+        </div>
+    </div>
+
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Scan Timestamp</th>
+                    <th>Cameras (Total / Active)</th>
+                    <th>Avg Compatibility Score</th>
+                    <th>Target IPs Scanned</th>
+                    <th>Report Link</th>
+                </tr>
+            </thead>
+            <tbody>
+"""
+    
+    if not scans_history:
+        html_content += """
+                <tr>
+                    <td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">
+                        No previous scan reports found in this folder.
+                    </td>
+                </tr>
+        """
+    else:
+        for scan in scans_history:
+            score = scan["score"]
+            badge_class = "badge-success"
+            score_display = f"{score}%"
+            if score == "N/A":
+                badge_class = "badge-warning"
+                score_display = "N/A"
+            elif score < 50:
+                badge_class = "badge-error"
+            elif score < 90:
+                badge_class = "badge-warning"
+                
+            html_content += f"""
+                <tr>
+                    <td><b>{scan['time']}</b></td>
+                    <td class="mono-text">{scan['total']} total / {scan['active']} active</td>
+                    <td>
+                        <span class="badge {badge_class}">{score_display}</span>
+                    </td>
+                    <td class="mono-text" title="{scan['ips']}">{scan['ips'][:60]}{'...' if len(scan['ips']) > 60 else ''}</td>
+                    <td>
+                        <a href="{scan['link']}" class="btn" target="_blank">Open Report</a>
+                    </td>
+                </tr>
+            """
+            
+    html_content += """
+            </tbody>
+        </table>
+    </div>
+
+</body>
+</html>
+"""
+    
+    try:
+        index_path = os.path.join(output_dir, "index.html")
+        with open(index_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+        print(f"[+] Index archive page successfully updated: {index_path}")
+        return True
+    except Exception as e:
+        print(f"[-] Failed to update index.html archive: {e}", file=sys.stderr)
         return False

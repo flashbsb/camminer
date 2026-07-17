@@ -5,9 +5,11 @@ import sys
 import time
 
 class PerformanceTester:
-    def __init__(self, ip, streams, timeout=5.0):
+    def __init__(self, ip, streams, ping_count=5, stream_duration=5, timeout=5.0):
         self.ip = ip
         self.streams = streams
+        self.ping_count = ping_count
+        self.stream_duration = stream_duration
         self.timeout = timeout
         
         self.ping_loss = 100.0
@@ -35,14 +37,14 @@ class PerformanceTester:
         """
         Runs ping test and parses statistics (packet loss, avg RTT, jitter).
         """
-        print("  [*] Pinging host (5 packets)...")
+        print(f"  [*] Pinging host ({self.ping_count} packets)...")
         # Run ping command (using standard flags for Linux)
-        cmd = ["ping", "-c", "5", "-W", "2", self.ip]
+        cmd = ["ping", "-c", str(self.ping_count), "-W", "2", self.ip]
         try:
             startupinfo = None
             if os.name == 'nt':
                 # Windows support just in case
-                cmd = ["ping", "-n", "5", "-w", "2000", self.ip]
+                cmd = ["ping", "-n", str(self.ping_count), "-w", "2000", self.ip]
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 
@@ -89,7 +91,7 @@ class PerformanceTester:
             
         for name, stream_info in self.streams.items():
             url = stream_info["url"]
-            print(f"  [*] Testing {name.capitalize()} stream throughput & frame delivery (5 seconds)...")
+            print(f"  [*] Testing {name.capitalize()} stream throughput & frame delivery ({self.stream_duration} seconds)...")
             
             # Use ffmpeg to record statistics about the stream
             # We copy codecs and dump to null. This reads raw frames without decoding CPU overhead.
@@ -98,7 +100,7 @@ class PerformanceTester:
                 "-rtsp_transport", "tcp",
                 "-y",
                 "-i", url,
-                "-t", "5",         # 5 seconds test duration
+                "-t", str(self.stream_duration),         # customizable test duration
                 "-c", "copy",
                 "-f", "null",
                 "-"
@@ -115,7 +117,7 @@ class PerformanceTester:
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    timeout=10.0,  # 10s timeout in case stream freezes
+                    timeout=self.stream_duration + 5.0,  # timeout in case stream freezes
                     startupinfo=startupinfo
                 )
                 
@@ -143,9 +145,33 @@ class PerformanceTester:
                 else:
                     # Estimate based on size and elapsed time if size is parsed
                     # E.g. Lsize=    4521kB
+                    size_kb = 0.0
                     size_matches = re.findall(r"Lsize=\s*(\d+)kB", stderr_output)
-                    if size_matches and t_elapsed > 0:
+                    if size_matches:
                         size_kb = float(size_matches[-1])
+                    else:
+                        # Try to parse from video:XXXX units audio:YYYY units summary output
+                        v_match = re.search(r"video:\s*([\d\.]+)\s*([a-zA-Z]+)", stderr_output)
+                        a_match = re.search(r"audio:\s*([\d\.]+)\s*([a-zA-Z]+)", stderr_output)
+                        
+                        def parse_unit_to_kb(val_str, unit):
+                            try:
+                                val = float(val_str)
+                                u = unit.lower()
+                                if 'm' in u:
+                                    return val * 1024.0
+                                elif 'k' in u:
+                                    return val
+                                return val / 1024.0
+                            except Exception:
+                                return 0.0
+                                
+                        if v_match:
+                            size_kb += parse_unit_to_kb(v_match.group(1), v_match.group(2))
+                        if a_match:
+                            size_kb += parse_unit_to_kb(a_match.group(1), a_match.group(2))
+                            
+                    if size_kb > 0 and t_elapsed > 0:
                         # Size in kbits = size_kb * 8
                         bitrate_kbps = (size_kb * 8) / t_elapsed
                 
@@ -190,7 +216,7 @@ class PerformanceTester:
                     "duration": 0
                 }
 
-def run_performance_suite(camera_reports, timeout=5.0):
+def run_performance_suite(camera_reports, ping_count=5, stream_duration=5, timeout=5.0):
     """
     Runs the performance tester on each successfully probed camera.
     """
@@ -205,7 +231,13 @@ def run_performance_suite(camera_reports, timeout=5.0):
         
         # Only run tests if camera has working streams
         if streams:
-            tester = PerformanceTester(ip, streams, timeout=timeout)
+            tester = PerformanceTester(
+                ip, 
+                streams, 
+                ping_count=ping_count, 
+                stream_duration=stream_duration, 
+                timeout=timeout
+            )
             perf_reports[ip] = tester.run_tests()
         else:
             print(f"\n[-] Skipping performance tests for {ip} (no active RTSP streams found).")

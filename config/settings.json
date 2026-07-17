@@ -2,6 +2,8 @@
   "timeout": 3.0,
   "threads": 20,
   "scan_ports": [554, 8554, 80, 8080, 8888, 5000, 3702],
+  "perf_ping_count": 5,
+  "perf_stream_duration": 5,
   "common_rtsp_paths": [
     "/11",
     "/12",

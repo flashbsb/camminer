@@ -18,3 +18,5 @@ venv/
 # External development environments
 ../d-camminer/
 d-camminer/
+
+.agents

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 import os
 import sys
+import socket
 from datetime import datetime
+
+# Set global default socket timeout to prevent indefinite urllib or socket hangs
+socket.setdefaulttimeout(4.0)
 
 # Add core path to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -12,9 +16,20 @@ from core.prober import probe_cameras
 from core.performance import run_performance_suite
 from core.exporter import format_terminal_table, export_csv, export_html, export_json
 
+__version__ = "1.2.0"
+
 def main():
-    print("="*80)
-    print("                    ANTIGRAVITY CAMMINER - NETWORK CAMERA DISCOVERY & ANALYSIS")
+    banner = f"""
+    ██████╗ ███████╗████████╗██████╗  ██████╗  ██████╗  ██████╗ ███████╗██████╗ 
+   ██╔════╝ ██╔════╝╚══██╔══╝██╔══██╗██╔═══██╗██╔════╝ ██╔════╝ ██╔════╝██╔══██╗
+   ██║  ███╗███████╗   ██║   ██████╔╝██║   ██║██║  ███╗██║  ███╗█████╗  ██████╔╝
+   ██║   ██║╚════██║   ██║   ██╔══██╗██║   ██║██║   ██║██║   ██║██╔══╝  ██╔══██╗
+   ╚██████╔╝███████║   ██║   ██║  ██║╚██████╔╝╚██████╔╝╚██████╔╝███████╗██║  ██║
+    ╚═════╝ ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝  ╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝
+             Antigravity CamMiner - IP Camera Discovery & Analysis Utility
+                                 Version: {__version__}
+    """
+    print(banner)
     print("="*80)
     
     # Initialize Configuration
@@ -70,6 +85,8 @@ def main():
     if config.run_perf:
         perf_reports = run_performance_suite(
             camera_reports=camera_reports,
+            ping_count=config.perf_ping_count,
+            stream_duration=config.perf_stream_duration,
             timeout=5.0
         )
         
@@ -88,8 +105,8 @@ def main():
         csv_path = os.path.join(config.output_dir, csv_filename)
         export_csv(csv_path, camera_reports, perf_reports)
         
-    # Export JSON File
-    if "json" in config.export_formats:
+    # Export JSON File (always required if HTML is requested for index page summaries)
+    if "json" in config.export_formats or "html" in config.export_formats:
         json_filename = f"scan_report_{timestamp}.json"
         json_path = os.path.join(config.output_dir, json_filename)
         export_json(json_path, camera_reports, perf_reports)

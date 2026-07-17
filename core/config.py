@@ -16,6 +16,10 @@ class Config:
         self.scan_ports = [554, 8554, 80, 8080, 8888, 5000, 3702]
         self.common_rtsp_paths = []
         
+        # Performance Suite settings
+        self.perf_ping_count = 5
+        self.perf_stream_duration = 5
+        
         self.targets = []
         self.credentials = []
         
@@ -98,6 +102,8 @@ class Config:
                         self.scan_ports = list(data.get("scan_ports", self.scan_ports))
                         self.common_rtsp_paths = list(data.get("common_rtsp_paths", self.common_rtsp_paths))
                         self.output_dir = data.get("default_output_dir", self.output_dir)
+                        self.perf_ping_count = int(data.get("perf_ping_count", self.perf_ping_count))
+                        self.perf_stream_duration = int(data.get("perf_stream_duration", self.perf_stream_duration))
                         settings_loaded = True
                         break
                 except Exception as e:
