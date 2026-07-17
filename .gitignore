@@ -1,9 +1,9 @@
 # Configs containing camera credentials
-config/scan.cfg
-config/user.cfg
+#config/scan.cfg
+#config/user.cfg
 
 # Local output reports
-infos/
+infos*
 
 # Python caching & environment
 __pycache__/
@@ -15,8 +15,5 @@ env/
 venv/
 .pytest_cache/
 
-# External development environments
-../d-camminer/
-d-camminer/
-
+# Agents
 .agents

@@ -21,6 +21,7 @@ class Config:
         self.perf_stream_duration = 5
         
         self.targets = []
+        self.targets_overridden = False
         self.credentials = []
         
         self.run_scan = True
@@ -66,6 +67,19 @@ class Config:
             default="terminal,csv,html",
             help="Output formats (comma-separated: terminal,csv,html,json. default: terminal,csv,html)"
         )
+        parser.add_argument(
+            "-t", "--target",
+            action="append",
+            help="Scan target IP address or CIDR network block (overrides scan.cfg)"
+        )
+        parser.add_argument(
+            "--user",
+            help="Authentication username (requires --password, overrides user.cfg)"
+        )
+        parser.add_argument(
+            "--password",
+            help="Authentication password (requires --user, overrides user.cfg)"
+        )
 
         args = parser.parse_args()
         
@@ -84,8 +98,19 @@ class Config:
         if args.output_dir:
             self.output_dir = args.output_dir
             
-        self.load_targets()
-        self.load_credentials()
+        if args.target:
+            self.targets = self._parse_ip_lines(args.target, "--target")
+            self.targets_overridden = True
+            print(f"[+] Using targets from command line: {len(self.targets)} IP(s)")
+        else:
+            self.load_targets()
+            
+        if args.user is not None:
+            pwd = args.password if args.password is not None else ""
+            self.credentials = [(None, None), ("", ""), (args.user, pwd)]
+            print(f"[+] Using command-line credentials: '{args.user}:{pwd}' (overrides user.cfg)")
+        else:
+            self.load_credentials()
 
     def load_settings(self):
         # Prefer custom settings path, fallback to default or check environment
@@ -135,46 +160,51 @@ class Config:
             self.targets = self._generate_local_subnet_ips()
             print(f"[+] Defaulting to local subnet targets: {len(self.targets)} IPs")
 
-    def _parse_ip_config(self, filepath):
+    def _parse_ip_lines(self, lines, source_name):
         ips = []
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            
+            # Check if CIDR notation
+            if "/" in line:
+                try:
+                    net = ipaddress.ip_network(line, strict=False)
+                    for ip in net.hosts():
+                        ips.append(str(ip))
+                except ValueError as ve:
+                    print(f"[-] Invalid subnet notation in {source_name}: {line} ({ve})", file=sys.stderr)
+            # Check if IP range
+            elif "-" in line:
+                try:
+                    start_str, end_str = line.split("-")
+                    start = ipaddress.IPv4Address(start_str.strip())
+                    end = ipaddress.IPv4Address(end_str.strip())
+                    if int(start) <= int(end):
+                        for ip_int in range(int(start), int(end) + 1):
+                            ips.append(str(ipaddress.IPv4Address(ip_int)))
+                    else:
+                        print(f"[-] Invalid IP range in {source_name} (start > end): {line}", file=sys.stderr)
+                except ValueError as ve:
+                    print(f"[-] Invalid range notation in {source_name}: {line} ({ve})", file=sys.stderr)
+            # Single IP
+            else:
+                try:
+                    ip = ipaddress.IPv4Address(line)
+                    ips.append(str(ip))
+                except ValueError:
+                    print(f"[-] Invalid IP address in {source_name}: {line}", file=sys.stderr)
+        return list(dict.fromkeys(ips)) # remove duplicates
+
+    def _parse_ip_config(self, filepath):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    
-                    # Check if CIDR notation
-                    if "/" in line:
-                        try:
-                            net = ipaddress.ip_network(line, strict=False)
-                            for ip in net.hosts():
-                                ips.append(str(ip))
-                        except ValueError as ve:
-                            print(f"[-] Invalid subnet notation in scan.cfg: {line} ({ve})", file=sys.stderr)
-                    # Check if IP range
-                    elif "-" in line:
-                        try:
-                            start_str, end_str = line.split("-")
-                            start = ipaddress.IPv4Address(start_str.strip())
-                            end = ipaddress.IPv4Address(end_str.strip())
-                            if int(start) <= int(end):
-                                for ip_int in range(int(start), int(end) + 1):
-                                    ips.append(str(ipaddress.IPv4Address(ip_int)))
-                            else:
-                                print(f"[-] Invalid IP range in scan.cfg (start > end): {line}", file=sys.stderr)
-                        except ValueError as ve:
-                            print(f"[-] Invalid range notation in scan.cfg: {line} ({ve})", file=sys.stderr)
-                    # Single IP
-                    else:
-                        try:
-                            ip = ipaddress.IPv4Address(line)
-                            ips.append(str(ip))
-                        except ValueError:
-                            print(f"[-] Invalid IP address in scan.cfg: {line}", file=sys.stderr)
+                lines = f.readlines()
+            return self._parse_ip_lines(lines, filepath)
         except Exception as e:
             print(f"[-] Error reading {filepath}: {e}", file=sys.stderr)
-        return list(dict.fromkeys(ips)) # remove duplicates
+            return []
 
     def _generate_local_subnet_ips(self):
         # Fallback to local subnet. Let's try to detect network or default to 192.168.0.0/24

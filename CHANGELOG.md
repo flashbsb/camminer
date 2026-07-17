@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.2] - 2026-07-16
+
+### Added
+- **Command Line IP Targets Override (`--target`)**: Bypasses `scan.cfg` and WS-Discovery automatically when targets are explicitly supplied, accepting single IP addresses or CIDR block networks.
+- **Command Line Credentials Override (`--user` & `--password`)**: Enables testing a specific credentials pair on target cameras, bypassing `user.cfg` file queries.
+
 ## [1.2.1] - 2026-07-16
 
 ### Added

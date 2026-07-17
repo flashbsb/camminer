@@ -16,7 +16,7 @@ from core.prober import probe_cameras
 from core.performance import run_performance_suite
 from core.exporter import format_terminal_table, export_csv, export_html, export_json
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 def main():
     banner = f"""
@@ -40,18 +40,21 @@ def main():
         print("[*] Scan disabled via --no-scan flag. Exiting.")
         return
         
-    # Step 1: Perform ONVIF WS-Discovery (multicast UDP)
-    discovered_ips = ws_discover()
-    
-    # Merge discovered IPs into scan targets
-    original_targets_count = len(config.targets)
-    for ip in discovered_ips:
-        if ip not in config.targets:
-            config.targets.append(ip)
-            
-    added_count = len(config.targets) - original_targets_count
-    if added_count > 0:
-        print(f"[+] Added {added_count} discovered ONVIF camera IP(s) to targets list.")
+    # Step 1: Perform ONVIF WS-Discovery (multicast UDP) unless target override is present
+    if not config.targets_overridden:
+        discovered_ips = ws_discover()
+        
+        # Merge discovered IPs into scan targets
+        original_targets_count = len(config.targets)
+        for ip in discovered_ips:
+            if ip not in config.targets:
+                config.targets.append(ip)
+                
+        added_count = len(config.targets) - original_targets_count
+        if added_count > 0:
+            print(f"[+] Added {added_count} discovered ONVIF camera IP(s) to targets list.")
+    else:
+        print("[*] WS-Discovery disabled when active targets are explicitly specified via command line.")
         
     if not config.targets:
         print("[-] No scan targets specified in scan.cfg and none discovered via WS-Discovery. Exiting.")
