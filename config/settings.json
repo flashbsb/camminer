@@ -24,8 +24,8 @@
     "/Streaming/Channels/102",
     "/Streaming/Channels/1",
     "/Streaming/Channels/2",
-    "/user={username}_password={password}_channel=1_stream=0&amponvif=0.sdp?real_st",
-    "/user={username}_password={password}_channel=1_stream=1&amponvif=0.sdp?real_st"
+    "/user={username}_password={password}_channel=1_stream=0&onvif=0.sdp?real_st",
+    "/user={username}_password={password}_channel=1_stream=1&onvif=0.sdp?real_st"
   ],
   "default_output_dir": "infos"
 }

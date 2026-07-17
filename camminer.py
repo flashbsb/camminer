@@ -16,7 +16,7 @@ from core.prober import probe_cameras
 from core.performance import run_performance_suite
 from core.exporter import format_terminal_table, export_csv, export_html, export_json
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 def main():
     banner = f"""
@@ -26,7 +26,7 @@ def main():
    ██║   ██║╚════██║   ██║   ██╔══██╗██║   ██║██║   ██║██║   ██║██╔══╝  ██╔══██╗
    ╚██████╔╝███████║   ██║   ██║  ██║╚██████╔╝╚██████╔╝╚██████╔╝███████╗██║  ██║
     ╚═════╝ ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝  ╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝
-             Antigravity CamMiner - IP Camera Discovery & Analysis Utility
+             IP Camera Discovery & Analysis Utility
                                  Version: {__version__}
     """
     print(banner)

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.1] - 2026-07-16
+
+### Added
+- **Non-Intrusive SDP Metadata Parsing**: Added raw Session Description Protocol (SDP) body parser mapping media stream attributes (codecs: `H264`/`H265`, nominal frame rate, audio attributes) directly from raw `DESCRIBE` responses.
+- **SDP Fallback Verification on Wildcards**: Wildcard RTSP servers are now validated using SDP metadata filters (checking for presence of `m=video`/`a=rtpmap`), bypassing stream channel connection limit timeouts on active cameras streaming to NVRs/Shinobi.
+
+### Fixed
+- **Regex WWW-Authenticate Header Parser**: Replaced fragile string line-splitting matches with case-insensitive regex to capture WWW-Authenticate headers, solving digest credential sweeps on Xiongmai camera systems.
+- **Robust Realm & Nonce Parser**: Enhanced challenge token extraction to handle unquoted realms/nonces returned by proprietary camera protocols.
+- **HTML Toggle Filter Button Highlighting**: Fixed active CSS class toggling in the dashboard HTML dashboard code when filtering status rows.
+
 ## [1.2.0] - 2026-07-16
 
 ### Added

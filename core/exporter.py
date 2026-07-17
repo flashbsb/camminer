@@ -772,7 +772,7 @@ def export_html(output_path, camera_reports, perf_reports=None):
             
             // Set active button
             buttons.forEach(btn => {{
-                if (btn.innerText.toLowerCase() === status || (status === 'all' && btn.innerText.toLowerCase() === 'all')) {{
+                if (btn.getAttribute("onclick").includes("'" + status + "'")) {{
                     btn.classList.add("active");
                 }} else {{
                     btn.classList.remove("active");

@@ -65,14 +65,20 @@ def send_soap_request(url, xml_payload, timeout=3.0):
     req = urllib.request.Request(url, data=xml_payload.encode('utf-8'), headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
-            return response.read()
+            body = response.read()
+            if body and b"envelope" in body.lower():
+                return body
+            return None
     except Exception:
         # Fallback to text/xml for SOAP 1.1 if application/soap+xml fails
         headers["Content-Type"] = "text/xml; charset=utf-8"
         req = urllib.request.Request(url, data=xml_payload.encode('utf-8'), headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response:
-                return response.read()
+                body = response.read()
+                if body and b"envelope" in body.lower():
+                    return body
+                return None
         except Exception:
             return None
 
@@ -127,6 +133,7 @@ def verify_rtsp_url_raw(rtsp_url, timeout=1.5):
 def check_digest_auth(rtsp_url, username, password, www_auth_header, timeout=1.5):
     """
     Attempts Digest authentication using parameters from the WWW-Authenticate header.
+    Returns (success, response_body)
     """
     try:
         parsed = urlparse(rtsp_url)
@@ -141,15 +148,15 @@ def check_digest_auth(rtsp_url, username, password, www_auth_header, timeout=1.5
         
         realm = ""
         nonce = ""
-        realm_match = re.search(r'realm="([^"]+)"', www_auth_header, re.IGNORECASE)
+        realm_match = re.search(r'realm="?([^",\s]+)"?', www_auth_header, re.IGNORECASE)
         if realm_match:
             realm = realm_match.group(1)
-        nonce_match = re.search(r'nonce="([^"]+)"', www_auth_header, re.IGNORECASE)
+        nonce_match = re.search(r'nonce="?([^",\s]+)"?', www_auth_header, re.IGNORECASE)
         if nonce_match:
             nonce = nonce_match.group(1)
             
         if not realm or not nonce:
-            return False
+            return False, None
             
         ha1 = hashlib.md5(f"{username}:{realm}:{password}".encode('utf-8')).hexdigest()
         ha2 = hashlib.md5(f"{method}:{uri}".encode('utf-8')).hexdigest()
@@ -176,23 +183,87 @@ def check_digest_auth(rtsp_url, username, password, www_auth_header, timeout=1.5
         response = sock.recv(2048).decode('utf-8', errors='ignore')
         sock.close()
         
-        return "RTSP/1.0 200" in response
+        success = "RTSP/1.0 200" in response
+        return success, response
     except Exception:
+        return False, None
+
+def is_valid_sdp(sdp_text):
+    """
+    Checks if the response contains valid SDP configuration elements (e.g. video media payload metadata).
+    """
+    if not sdp_text:
         return False
+    lower_text = sdp_text.lower()
+    return "m=video" in lower_text or "a=rtpmap" in lower_text
+
+def parse_sdp_metadata(sdp_text):
+    """
+    Parses video codec, framerate, and audio codec from an SDP body.
+    Returns (codec, fps, audio)
+    """
+    codec = "Unknown"
+    fps = "Unknown"
+    audio = "Unknown"
+    
+    if not sdp_text:
+        return codec, fps, audio
+        
+    lines = sdp_text.split("\n")
+    current_media = None # "video" or "audio"
+    
+    for line in lines:
+        line = line.strip()
+        if line.startswith("m="):
+            parts = line.split()
+            if len(parts) > 0:
+                current_media = parts[0][2:] # e.g. "video" or "audio"
+                
+        elif line.startswith("a=rtpmap:"):
+            # e.g., a=rtpmap:96 H264/90000 or a=rtpmap:8 PCMA/8000
+            parts = line[9:].split()
+            if len(parts) >= 2:
+                payload_type = parts[0]
+                codec_part = parts[1].split("/")[0].upper()
+                if current_media == "video":
+                    codec = codec_part
+                elif current_media == "audio":
+                    audio = codec_part
+                    
+        elif line.startswith("a=framerate:"):
+            # e.g., a=framerate:25 or a=framerate:15.0
+            val_part = line[12:].strip()
+            try:
+                fps = int(float(val_part))
+            except Exception:
+                pass
+                
+        elif line.startswith("m=audio") and audio == "Unknown":
+            # Check static payload types
+            # RTP AVP 8 is PCMA, 0 is PCMU
+            parts = line.split()
+            if len(parts) >= 4 and parts[2] == "RTP/AVP":
+                pt = parts[3]
+                if pt == "8":
+                    audio = "PCMA"
+                elif pt == "0":
+                    audio = "PCMU"
+                    
+    return codec, fps, audio
 
 def authenticate_rtsp_url(rtsp_url, credentials, timeout=1.5):
     """
-    Tries different credentials on an RTSP URL. Returns the verified URL with working credentials,
-    or (None, None) if none of the credentials work.
+    Tries different credentials on an RTSP URL. Returns the verified URL, working credentials, and SDP body,
+    or (None, None, None) if none of the credentials work.
     """
     # 1. First check if it works without credentials
     status, auth_header, response = verify_rtsp_url_raw(rtsp_url, timeout=timeout)
     if status == "valid":
-        return rtsp_url, ("", "")
+        return rtsp_url, ("", ""), response
         
     if status != "unauthorized" or not response:
         # If it's a 404 or connection error, no credentials can fix it
-        return None, None
+        return None, None, None
         
     parsed = urlparse(rtsp_url)
     host = parsed.hostname
@@ -202,11 +273,8 @@ def authenticate_rtsp_url(rtsp_url, credentials, timeout=1.5):
         path += "?" + parsed.query
         
     # Extract WWW-Authenticate header
-    www_auth = ""
-    for line in response.split("\n"):
-        if "www-authenticate" in line.lower():
-            www_auth = line
-            break
+    www_auth_match = re.search(r'WWW-Authenticate:\s*(.*)', response, re.IGNORECASE)
+    www_auth = www_auth_match.group(0) if www_auth_match else ""
             
     # Try each credential pair
     for user, pwd in credentials:
@@ -231,17 +299,18 @@ def authenticate_rtsp_url(rtsp_url, credentials, timeout=1.5):
             sock.close()
             if "RTSP/1.0 200" in resp:
                 # Basic Auth succeeded! Return URL with credentials embedded
-                return f"rtsp://{user}:{pwd}@{host}:{port}{path}", (user, pwd)
+                return f"rtsp://{user}:{pwd}@{host}:{port}{path}", (user, pwd), resp
         except Exception:
             pass
             
         # 2. Try Digest Auth if challenge present
         if www_auth and "digest" in www_auth.lower():
-            if check_digest_auth(rtsp_url, user, pwd, www_auth, timeout=timeout):
+            success, resp_body = check_digest_auth(rtsp_url, user, pwd, www_auth, timeout=timeout)
+            if success:
                 # Digest Auth succeeded! Return URL with credentials embedded
-                return f"rtsp://{user}:{pwd}@{host}:{port}{path}", (user, pwd)
+                return f"rtsp://{user}:{pwd}@{host}:{port}{path}", (user, pwd), resp_body
                 
-    return None, None
+    return None, None, None
 
 class CameraProber:
     def __init__(self, ip, open_ports, credentials, settings):
@@ -480,9 +549,9 @@ class CameraProber:
                                         rtsp_url = test_url
                                         
                             # If still unauthenticated or anonymous check fails, try all passwords from user.cfg
-                            status, _, _ = verify_rtsp_url_raw(rtsp_url, timeout=1.0)
+                            status, _, sdp_body = verify_rtsp_url_raw(rtsp_url, timeout=1.0)
                             if status != "valid":
-                                verified_url, working_cred = authenticate_rtsp_url(rtsp_url, self.credentials)
+                                verified_url, working_cred, sdp_body = authenticate_rtsp_url(rtsp_url, self.credentials)
                                 if verified_url:
                                     rtsp_url = verified_url
                                     self.auth_success = working_cred
@@ -547,7 +616,17 @@ class CameraProber:
                                 a_enc = find_xml_elements(audio_conf[0], "Encoding")
                                 if a_enc:
                                     audio = a_enc[0].text.upper()
-                            
+                                    
+                            # Fallback to parsing from SDP headers if still Unknown
+                            if sdp_body:
+                                sdp_codec, sdp_fps, sdp_audio = parse_sdp_metadata(sdp_body)
+                                if codec == "Unknown" and sdp_codec != "Unknown":
+                                    codec = sdp_codec
+                                if fps == "Unknown" and sdp_fps != "Unknown":
+                                    fps = sdp_fps
+                                if audio == "Unknown" and sdp_audio != "Unknown":
+                                    audio = sdp_audio
+                                        
                             stream_type = "main" if i == 0 else "substream"
                             if i > 1:
                                 stream_type = f"substream_{i}"
@@ -571,20 +650,22 @@ class CameraProber:
         
         return False
  
-    def add_brute_forced_stream(self, rtsp_url, credentials):
+    def add_brute_forced_stream(self, rtsp_url, credentials, sdp_text=None):
         self.auth_success = credentials
         stype = "main" if len(self.streams) == 0 else f"substream_{len(self.streams)}"
         if len(self.streams) == 1:
             stype = "substream"
+            
+        codec, fps, audio = parse_sdp_metadata(sdp_text)
             
         self.streams[stype] = {
             "url": rtsp_url,
             "name": f"BruteForce_{stype}",
             "token": "None",
             "resolution": "Unknown",
-            "codec": "Unknown",
-            "fps": "Unknown",
-            "audio": "Unknown",
+            "codec": codec,
+            "fps": fps,
+            "audio": audio,
             "snapshot_url": "None"
         }
         user, pwd = credentials
@@ -642,6 +723,12 @@ class CameraProber:
             for path_template in self.settings.common_rtsp_paths:
                 # If the path has credential placeholders, test directly with credentials
                 if "{username}" in path_template or "{password}" in path_template:
+                    # Test if the path template accepts dummy credentials (credential wildcard path)
+                    dummy_path = path_template.format(username="dummy_user_999", password="dummy_pwd_999")
+                    dummy_url = f"rtsp://{self.ip}:{port}{dummy_path}"
+                    dummy_status, _, _ = verify_rtsp_url_raw(dummy_url, timeout=1.0)
+                    is_cred_wildcard = (dummy_status == "valid")
+                    
                     for user, pwd in self.credentials:
                         if user is None or (user == "" and pwd == ""):
                             continue
@@ -649,12 +736,12 @@ class CameraProber:
                         rtsp_url = f"rtsp://{self.ip}:{port}{path}"
                         status, auth_req, response = verify_rtsp_url_raw(rtsp_url, timeout=1.0)
                         if status == "valid":
-                            if is_unauth_wildcard:
-                                if self.verify_rtsp_url_ffprobe(rtsp_url, timeout=1.5):
-                                    self.add_brute_forced_stream(rtsp_url, (user, pwd))
+                            if is_unauth_wildcard or is_cred_wildcard:
+                                if self.verify_rtsp_url_ffprobe(rtsp_url, timeout=1.5) or is_valid_sdp(response):
+                                    self.add_brute_forced_stream(rtsp_url, (user, pwd), response)
                                     break
                             else:
-                                self.add_brute_forced_stream(rtsp_url, (user, pwd))
+                                self.add_brute_forced_stream(rtsp_url, (user, pwd), response)
                                 if len(self.streams) >= 2:
                                     return
                     continue
@@ -666,19 +753,16 @@ class CameraProber:
                 if status == "valid":
                     if is_unauth_wildcard:
                         # Verify with ffprobe to make sure it's a real stream
-                        if self.verify_rtsp_url_ffprobe(rtsp_url, timeout=1.5):
-                            self.add_brute_forced_stream(rtsp_url, (None, None))
+                        if self.verify_rtsp_url_ffprobe(rtsp_url, timeout=1.5) or is_valid_sdp(response):
+                            self.add_brute_forced_stream(rtsp_url, (None, None), response)
                             break # stop at first stream for wildcard to avoid duplicates
                     else:
-                        self.add_brute_forced_stream(rtsp_url, (None, None))
+                        self.add_brute_forced_stream(rtsp_url, (None, None), response)
                         if len(self.streams) >= 2:
                             return
                 elif status == "unauthorized":
-                    www_auth = ""
-                    for line in response.split("\r\n"):
-                        if line.lower().startswith("www-authenticate:"):
-                            www_auth = line
-                            break
+                    www_auth_match = re.search(r'WWW-Authenticate:\s*(.*)', response, re.IGNORECASE)
+                    www_auth = www_auth_match.group(0) if www_auth_match else ""
                     candidate_paths.append((path_template, www_auth))
                     
             if len(self.streams) >= 2:
@@ -703,7 +787,7 @@ class CameraProber:
                 status, auth_req, response = verify_rtsp_url_raw(rtsp_url_with_cred, timeout=1.0)
                 success = (status == "valid")
                 if not success and www_auth and "digest" in www_auth.lower():
-                    success = check_digest_auth(rtsp_url, user, pwd, www_auth, timeout=1.0)
+                    success, response = check_digest_auth(rtsp_url, user, pwd, www_auth, timeout=1.0)
                     
                 if success:
                     working_creds.append((user, pwd))
@@ -721,17 +805,18 @@ class CameraProber:
                     rtsp_url_with_cred = f"rtsp://{user}:{pwd}@{self.ip}:{port}{path}"
                     
                     if is_wildcard:
-                        if self.verify_rtsp_url_ffprobe(rtsp_url_with_cred, timeout=1.5):
-                            self.add_brute_forced_stream(rtsp_url_with_cred, (user, pwd))
+                        status, _, resp_sdp = verify_rtsp_url_raw(rtsp_url_with_cred, timeout=1.0)
+                        if self.verify_rtsp_url_ffprobe(rtsp_url_with_cred, timeout=1.5) or is_valid_sdp(resp_sdp):
+                            self.add_brute_forced_stream(rtsp_url_with_cred, (user, pwd), resp_sdp)
                             break # stop at first stream for wildcard to avoid duplicates
                     else:
                         status, auth_req, response = verify_rtsp_url_raw(rtsp_url_with_cred, timeout=1.0)
                         success = (status == "valid")
                         if not success and www_auth and "digest" in www_auth.lower():
-                            success = check_digest_auth(rtsp_url, user, pwd, www_auth, timeout=1.0)
+                            success, response = check_digest_auth(rtsp_url, user, pwd, www_auth, timeout=1.0)
                             
                         if success:
-                            self.add_brute_forced_stream(rtsp_url_with_cred, (user, pwd))
+                            self.add_brute_forced_stream(rtsp_url_with_cred, (user, pwd), response)
                             if len(self.streams) >= 2:
                                 return
 
