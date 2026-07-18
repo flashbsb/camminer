@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] - 2026-07-17
+
+### Added
+- **Default Performance Suite (`--no-perf`)**: Replaced `--perf` CLI flag with `--no-perf`. Performance and throughput analysis suite is now active by default on all runs unless `--no-perf` is passed.
+- **Automated Snapshot Image Capture (`--no-image`)**: Automatically grabs single-frame snapshot images (`.jpg`) via HTTP ONVIF endpoints or FFmpeg RTSP stream grab. Enabled by default, can be disabled using `--no-image`.
+- **Automated Short Video Recording (`--no-video`)**: Automatically records short MP4 video clips (`.mp4`) from active RTSP streams for `perf_stream_duration` seconds. Enabled by default, can be disabled using `--no-video`.
+- **Responsive HTML Lightbox Modal**: Embedded interactive snapshot image thumbnails and inline video previews in camera report cards. Clicking any snapshot or video opens a full-viewport modal overlay (`90vw x 90vh; object-fit: contain`) maintaining aspect ratio without cropping.
+- **Parallel Media Extraction**: Multi-threaded worker pool executing snapshot and video clip generation concurrently across active cameras.
+
 ## [1.2.2] - 2026-07-16
 
 ### Added

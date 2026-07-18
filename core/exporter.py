@@ -53,6 +53,7 @@ def export_csv(output_path, camera_reports, perf_reports=None):
         "ping_avg_rtt_ms", "ping_loss_percent", "ping_jitter_ms",
         "main_test_fps", "main_test_bitrate_kbps", "main_test_status",
         "sub_test_fps", "sub_test_bitrate_kbps", "sub_test_status",
+        "image_file", "video_file",
         "recommendations"
     ]
     
@@ -97,6 +98,8 @@ def export_csv(output_path, camera_reports, perf_reports=None):
                     "sub_test_fps": sub_perf.get("fps", ""),
                     "sub_test_bitrate_kbps": sub_perf.get("bitrate_kbps", ""),
                     "sub_test_status": sub_perf.get("status", ""),
+                    "image_file": cam.get("image_file", ""),
+                    "video_file": cam.get("video_file", ""),
                     "recommendations": "; ".join(cam["recommendations"])
                 }
                 writer.writerow(row)
@@ -518,6 +521,93 @@ def export_html(output_path, camera_reports, perf_reports=None):
             border-top: 1px dashed rgba(255,255,255,0.05);
         }}
 
+        /* Media Thumbnails & Lightbox Modal */
+        .media-container {{
+            margin-top: 0.5rem;
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }}
+
+        .media-thumb-box {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }}
+
+        .media-thumb {{
+            width: 90px;
+            height: 60px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            cursor: pointer;
+            background-color: #000;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }}
+
+        .media-thumb:hover {{
+            transform: scale(1.05);
+            border-color: var(--primary-light);
+        }}
+
+        .modal-overlay {{
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(8px);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem;
+        }}
+
+        .modal-overlay.active {{
+            display: flex;
+        }}
+
+        .modal-content-wrapper {{
+            position: relative;
+            max-width: 90vw;
+            max-height: 90vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }}
+
+        .modal-media-element {{
+            max-width: 90vw;
+            max-height: 90vh;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }}
+
+        .modal-close-btn {{
+            position: absolute;
+            top: -40px;
+            right: 0;
+            background: transparent;
+            border: none;
+            color: #fff;
+            font-size: 2rem;
+            cursor: pointer;
+            padding: 0.25rem 0.5rem;
+            transition: color 0.15s ease;
+        }}
+
+        .modal-close-btn:hover {{
+            color: var(--error);
+        }}
+
         /* Scrollbar */
         ::-webkit-scrollbar {{
             width: 8px;
@@ -691,6 +781,28 @@ def export_html(output_path, camera_reports, perf_reports=None):
                 class_mod = 'style="color:var(--success);"'
             recs_list_html += f"<li {class_mod}>{rec}</li>"
             
+        # Media Thumbnails & Clips
+        image_file = c.get("image_file")
+        video_file = c.get("video_file")
+        media_html = ""
+        if image_file or video_file:
+            media_html += '<div class="media-container">'
+            if image_file:
+                media_html += f'''
+                <div class="media-thumb-box">
+                    <img src="{image_file}" class="media-thumb" onclick="openMediaModal('{image_file}', 'image')" title="Click to view full size image">
+                    <span>Snapshot</span>
+                </div>
+                '''
+            if video_file:
+                media_html += f'''
+                <div class="media-thumb-box">
+                    <video src="{video_file}" class="media-thumb" onclick="openMediaModal('{video_file}', 'video')" title="Click to view full size video" muted preload="metadata"></video>
+                    <span>Clip</span>
+                </div>
+                '''
+            media_html += '</div>'
+            
         html_content += f"""
                 <tr data-status="{filter_status}">
                     <td>
@@ -700,6 +812,7 @@ def export_html(output_path, camera_reports, perf_reports=None):
                             Model: {model}<br>
                             FW: {fw}
                         </span>
+                        {media_html}
                     </td>
                     <td style="font-size:0.85rem">
                         {user_desc}
@@ -750,7 +863,47 @@ def export_html(output_path, camera_reports, perf_reports=None):
         </table>
     </div>
 
+    <!-- Lightbox Modal -->
+    <div id="mediaModalOverlay" class="modal-overlay" onclick="if(event.target === this) closeMediaModal();">
+        <div class="modal-content-wrapper">
+            <button class="modal-close-btn" onclick="closeMediaModal()">&times;</button>
+            <div id="mediaModalContainer"></div>
+        </div>
+    </div>
+
     <script>
+        function openMediaModal(src, type) {{
+            const overlay = document.getElementById('mediaModalOverlay');
+            const container = document.getElementById('mediaModalContainer');
+            container.innerHTML = '';
+            
+            if (type === 'image') {{
+                const img = document.createElement('img');
+                img.src = src;
+                img.className = 'modal-media-element';
+                container.appendChild(img);
+            }} else if (type === 'video') {{
+                const video = document.createElement('video');
+                video.src = src;
+                video.controls = true;
+                video.autoplay = true;
+                video.className = 'modal-media-element';
+                container.appendChild(video);
+            }}
+            
+            overlay.classList.add('active');
+        }}
+
+        function closeMediaModal() {{
+            const overlay = document.getElementById('mediaModalOverlay');
+            const container = document.getElementById('mediaModalContainer');
+            overlay.classList.remove('active');
+            container.innerHTML = '';
+        }}
+
+        document.addEventListener('keydown', function(e) {{
+            if (e.key === 'Escape') closeMediaModal();
+        }});
         function copyToClipboard(text, el) {{
             navigator.clipboard.writeText(text).then(() => {{
                 const originalText = el.innerText;
@@ -904,6 +1057,9 @@ def update_index_html(output_dir):
             cameras = data.get("cameras", [])
             total_cams = len(cameras)
             active_cams = sum(1 for c in cameras if c.get("streams"))
+            img_count = sum(1 for c in cameras if c.get("image_file"))
+            vid_count = sum(1 for c in cameras if c.get("video_file"))
+            media_summary = f"{img_count} Photo{'s' if img_count != 1 else ''}, {vid_count} Video{'s' if vid_count != 1 else ''}"
             
             avg_score = 0
             if total_cams > 0:
@@ -921,6 +1077,7 @@ def update_index_html(output_dir):
                     "raw_time": scan_time_str,
                     "total": f"{total_cams}",
                     "active": f"{active_cams}",
+                    "media": media_summary,
                     "score": avg_score,
                     "ips": ips_str,
                     "link": html_path
@@ -951,6 +1108,7 @@ def update_index_html(output_dir):
                 "raw_time": raw_time_fallback,
                 "total": "N/A",
                 "active": "N/A",
+                "media": "N/A",
                 "score": "N/A",
                 "ips": "Legacy Report (No JSON Metadata)",
                 "link": base_name
@@ -1159,6 +1317,7 @@ def update_index_html(output_dir):
                 <tr>
                     <th>Scan Timestamp</th>
                     <th>Cameras (Total / Active)</th>
+                    <th>Media Assets</th>
                     <th>Avg Compatibility Score</th>
                     <th>Target IPs Scanned</th>
                     <th>Report Link</th>
@@ -1170,7 +1329,7 @@ def update_index_html(output_dir):
     if not scans_history:
         html_content += """
                 <tr>
-                    <td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">
+                    <td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 2rem;">
                         No previous scan reports found in this folder.
                     </td>
                 </tr>
@@ -1192,6 +1351,7 @@ def update_index_html(output_dir):
                 <tr>
                     <td><b>{scan['time']}</b></td>
                     <td class="mono-text">{scan['total']} total / {scan['active']} active</td>
+                    <td class="mono-text">{scan['media']}</td>
                     <td>
                         <span class="badge {badge_class}">{score_display}</span>
                     </td>

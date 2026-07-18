@@ -17,3 +17,7 @@ venv/
 
 # Agents
 .agents
+
+#temp and test
+test*
+temp*

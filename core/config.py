@@ -25,7 +25,9 @@ class Config:
         self.credentials = []
         
         self.run_scan = True
-        self.run_perf = False
+        self.run_perf = True
+        self.run_image = True
+        self.run_video = True
         self.export_formats = ["terminal", "csv", "html"]
 
     def parse_args(self):
@@ -58,9 +60,19 @@ class Config:
             help="Disable network and camera scan module"
         )
         parser.add_argument(
-            "--perf",
+            "--no-perf",
             action="store_true",
-            help="Enable active camera stream and network performance testing"
+            help="Disable camera stream and network performance testing"
+        )
+        parser.add_argument(
+            "--no-image",
+            action="store_true",
+            help="Disable camera snapshot image generation"
+        )
+        parser.add_argument(
+            "--no-video",
+            action="store_true",
+            help="Disable camera video clip recording"
         )
         parser.add_argument(
             "-f", "--format",
@@ -88,7 +100,9 @@ class Config:
         self.scan_cfg_path = args.scan_cfg
         self.user_cfg_path = args.user_cfg
         self.run_scan = not args.no_scan
-        self.run_perf = args.perf
+        self.run_perf = not args.no_perf
+        self.run_image = not args.no_image
+        self.run_video = not args.no_video
         self.export_formats = [fmt.strip().lower() for fmt in args.format.split(",")]
         
         # Load from files

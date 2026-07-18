@@ -14,9 +14,10 @@ from core.config import Config
 from core.scanner import ws_discover, scan_hosts
 from core.prober import probe_cameras
 from core.performance import run_performance_suite
+from core.media import generate_media_assets
 from core.exporter import format_terminal_table, export_csv, export_html, export_json
 
-__version__ = "1.2.2"
+__version__ = "1.3.0"
 
 def main():
     banner = f"""
@@ -96,6 +97,18 @@ def main():
     # Step 5: Exporting & Outputs
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(config.output_dir, exist_ok=True)
+
+    # Step 4.5: Generate Media Assets (Snapshot Images & Video Clips)
+    if config.run_image or config.run_video:
+        generate_media_assets(
+            camera_reports=camera_reports,
+            output_dir=config.output_dir,
+            credentials_list=config.credentials,
+            timestamp=timestamp,
+            run_image=config.run_image,
+            run_video=config.run_video,
+            duration=config.perf_stream_duration
+        )
     
     # Export Terminal Output
     if "terminal" in config.export_formats:

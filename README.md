@@ -15,9 +15,10 @@ sequenceDiagram
     participant S as Scanner (TCP/ONVIF Discovery)
     participant P as Prober (ONVIF/RTSP)
     participant PF as Performance (Ping/FFmpeg)
+    participant M as Media (Snapshot/Video Clips)
     participant E as Exporters (HTML/CSV/Index)
     
-    CLI->>C: Load configurations and settings
+    CLI->>C: Load configurations, CLI flags & settings
     CLI->>S: Run TCP Port Scan & ONVIF Multicast
     S-->>CLI: Return active hosts list
     
@@ -32,15 +33,23 @@ sequenceDiagram
         else ONVIF failed / not present
             P->>P: Brute-force RTSP paths (Raw socket DESCRIBE)
         end
-        P->>P: Run single-stream ffprobe (Resolution, Codec, FPS)
+        P->>P: Run single-stream ffprobe / SDP parser
         P-->>CLI: Return camera details report
     end
     
-    opt --perf flag requested
+    opt Performance Testing (default: enabled, bypass with --no-perf)
         loop For each camera with active streams
             CLI->>PF: Run Ping packet loss & Jitter checks
             CLI->>PF: Run FFmpeg stream copy throughput tests
             PF-->>CLI: Return performance report
+        end
+    end
+    
+    opt Media Asset Generation (default: enabled, bypass with --no-image / --no-video)
+        loop For each camera in parallel (ThreadPoolExecutor)
+            CLI->>M: Capture HTTP snapshot / FFmpeg single-frame grab
+            CLI->>M: Record short MP4 video clip via FFmpeg
+            M-->>CLI: Return media file relative paths
         end
     end
     
@@ -52,16 +61,16 @@ sequenceDiagram
 
 ## Features
 
-- **Concurrent Multi-Protocol Scanning**: Discover cameras concurrently using WS-Discovery (multicast UDP) and TCP port scanning (ThreadPoolExecutor).
+- **Concurrent Multi-Protocol Scanning**: Discover cameras concurrently using WS-Discovery (multicast UDP) and TCP port scanning (`ThreadPoolExecutor`).
 - **Fast Raw Socket RTSP Probing**: Brute forces RTSP URLs using lightweight socket-level `DESCRIBE` requests in milliseconds, only running `ffprobe` on confirmed working streams.
 - **RTSP Digest Authentication Support**: Custom challenge-response algorithm handles Basic/Digest RTSP challenges natively.
 - **Open-ONVIF Credential Fallback**: If a camera has open ONVIF endpoints but locks the RTSP stream, the prober automatically brute-forces the RTSP stream using user credentials and embeds the working set.
 - **ONVIF GetSnapshotUri Resolution**: Resolves and maps camera snapshot URLs (HTTP) and profile tokens.
-- **Customizable Performance Suite (`--perf`)**: 
-  - Network pings (average latency, packet loss, jitter).
-  - Active throughput captures (nominal/actual FPS, bandwidth bitrates, dropped packet status).
+- **Default Performance Suite (`--no-perf`)**: Ping statistics (latency, loss, jitter) and stream throughput testing are enabled by default.
+- **Automated Media Captures (`--no-image` / `--no-video`)**: Automatically captures single-frame `.jpg` snapshots and records short `.mp4` video clips from active streams in parallel.
+- **Responsive HTML Lightbox Modal**: Interactive snapshot image thumbnails and inline video previews in HTML dashboard reports expand to `90vw x 90vh` on click without cropping.
+- **Target & Credentials Overrides (`--target`, `--user`, `--password`)**: Target single IPs or CIDR blocks (`192.168.0.0/24`) and test specific credentials directly from the command line.
 - **Consolidated Archives (`index.html`)**: Automatically generates a historical database index linking all past scan reports.
-- **Micro-interactive UI**: Premium dark-themed HTML dashboard reports with copy-to-clipboard RTSP/Snapshot URLs.
 
 ---
 
@@ -83,7 +92,7 @@ Configurations are stored inside the `config/` directory:
    - `threads`: Thread pool size for parallel probing.
    - `scan_ports`: Target TCP ports (e.g. `554`, `80`, `8080`, `3702`).
    - `perf_ping_count`: Count of ping packets sent per target during performance tests.
-   - `perf_stream_duration`: Length of live ffmpeg stream copy tests (in seconds).
+   - `perf_stream_duration`: Length of live ffmpeg stream copy tests and video clip recordings (in seconds).
    - `common_rtsp_paths`: Common RTSP paths list to check.
    
 2. **`config/scan.cfg`**:
@@ -96,14 +105,24 @@ Configurations are stored inside the `config/` directory:
 
 ## Usage
 
-### Run a Standard Camera Probing Sweep:
+### Run a Standard Full Scan (Probing, Performance & Media Capture):
 ```bash
 ./camminer.py
 ```
 
-### Run a Sweep with Performance Diagnostics Enabled:
+### Scan Specific Targets (Bypassing `scan.cfg`):
 ```bash
-./camminer.py --perf
+./camminer.py --target 192.168.0.33 --target 192.168.0.128/25
+```
+
+### Test Specific Credentials (Bypassing `user.cfg`):
+```bash
+./camminer.py --user adminabc --password senhaabc
+```
+
+### Fast Scan Disabling Performance or Media Generation:
+```bash
+./camminer.py --no-perf --no-image --no-video
 ```
 
 ### Specify Custom Settings, Configuration, and Outputs:
@@ -112,8 +131,7 @@ Configurations are stored inside the `config/` directory:
   -c ../custom_scan.cfg \
   -u ../custom_user.cfg \
   -s ../custom_settings.json \
-  -o ../output_reports_dir/ \
-  --perf
+  -o ../output_reports_dir/
 ```
 
 ---
@@ -121,7 +139,8 @@ Configurations are stored inside the `config/` directory:
 ## Output Reports
 
 Outputs are saved in the configured output directory (default: `infos/`):
-- **`scan_report_*.csv`**: Flat sheet dataset containing resolved URLs, codecs, pings, and NVR ratings.
+- **`scan_report_*.csv`**: Flat sheet dataset containing resolved URLs, codecs, pings, media paths, and NVR ratings.
 - **`scan_report_*.json`**: Serialized database of scanned metrics.
-- **`scan_report_*.html`**: Interactive responsive dashboard showcasing summary distributions, chart graphics, filterable tables, and copyable links.
-- **`index.html`**: Consolidated historical log linking all past scans chronological order.
+- **`scan_report_*.html`**: Interactive responsive dashboard showcasing summary distributions, chart graphics, filterable tables, copyable links, and lightbox media viewers.
+- **`media/`**: Subdirectory containing snapshot images (`.jpg`) and video clips (`.mp4`).
+- **`index.html`**: Consolidated historical log linking all past scans in chronological order.
