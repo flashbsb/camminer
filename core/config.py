@@ -35,6 +35,8 @@ class Config:
         self.run_perf = True
         self.run_image = True
         self.run_video = True
+        self.verbose = False
+        self.log_to_file = False
         self.export_formats = ["terminal", "csv", "html"]
 
     def parse_args(self):
@@ -60,6 +62,16 @@ class Config:
             "-o", "--output-dir",
             default=None,
             help="Path to output directory (overrides settings.json config)"
+        )
+        parser.add_argument(
+            "-v", "--verbose",
+            action="store_true",
+            help="Enable verbose output for detailed execution debugging"
+        )
+        parser.add_argument(
+            "--log",
+            action="store_true",
+            help="Enable timestamped log file output in output directory for support debugging"
         )
         parser.add_argument(
             "--no-scan",
@@ -110,6 +122,8 @@ class Config:
         self.run_perf = not args.no_perf
         self.run_image = not args.no_image
         self.run_video = not args.no_video
+        self.verbose = args.verbose
+        self.log_to_file = args.log
         if args.format:
             self.export_formats = [fmt.strip().lower() for fmt in args.format.split(",")]
         

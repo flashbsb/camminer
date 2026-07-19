@@ -124,6 +124,11 @@ Configurations are stored inside the `config/` directory:
 ./camminer.py
 ```
 
+### Run with Verbose Console Output & Timestamped File Logging:
+```bash
+./camminer.py --verbose --log
+```
+
 ### Scan Specific Targets (Bypassing `scan.cfg`):
 ```bash
 ./camminer.py --target 192.168.0.33 --target 192.168.0.128/25
@@ -145,8 +150,12 @@ Configurations are stored inside the `config/` directory:
   -c ../custom_scan.cfg \
   -u ../custom_user.cfg \
   -s ../custom_settings.json \
-  -o ../output_reports_dir/
+  -o ../output_reports_dir/ \
+  --verbose \
+  --log
 ```
+
+Each execution creates an isolated timestamped subfolder inside the output directory (e.g. `infos/run_YYYYMMDD_HHMMSS/`) holding all reports, media assets (`media/`), and execution logs (`camminer_YYYYMMDD_HHMMSS.log`). The top-level `infos/index.html` page aggregates and links to all historical scan runs.
 
 ---
 

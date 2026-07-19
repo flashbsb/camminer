@@ -12,13 +12,14 @@ socket.setdefaulttimeout(4.0)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.config import Config
+from core.logger import Logger, Colors
 from core.scanner import ws_discover, scan_hosts
 from core.prober import probe_cameras
 from core.performance import run_performance_suite
 from core.media import generate_media_assets
-from core.exporter import format_terminal_table, export_csv, export_html, export_json
+from core.exporter import format_terminal_table, export_csv, export_html, export_json, update_index_html
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 def check_dependencies():
     """
@@ -52,7 +53,7 @@ def check_dependencies():
             
     if missing_deps:
         print("\n" + "="*80)
-        print("[-] ERROR: Unmet dependencies detected!")
+        print(f"{Colors.RED}[!] ERROR: Unmet dependencies detected!{Colors.RESET}")
         print("="*80)
         print("The following required dependencies were not found:\n")
         for dep in missing_deps:
@@ -82,12 +83,6 @@ For complete dependency details, see requirements.txt in the project root.
 
 def main():
     check_dependencies()
-    banner = f"""
-             IP Camera Discovery & Analysis Utility
-                                 Version: {__version__}
-    """
-    print(banner)
-    print("="*80)
     
     # Initialize Configuration
     config = Config()
@@ -95,12 +90,34 @@ def main():
     
     # Apply global socket timeout from settings.json
     socket.setdefaulttimeout(config.socket_timeout)
+
+    # Prepare timestamped execution subfolder
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = os.path.join(config.output_dir, f"run_{timestamp}")
+    os.makedirs(run_dir, exist_ok=True)
+
+    # Initialize Logger
+    log_file_path = os.path.join(run_dir, f"camminer_{timestamp}.log") if config.log_to_file else None
+    log = Logger(verbose=config.verbose, log_to_file=config.log_to_file, log_filepath=log_file_path)
+
+    banner = f"""
+{Colors.CYAN}{Colors.BOLD}             camminer IP Camera Discovery & Analysis Utility{Colors.RESET}
+                                  {Colors.YELLOW}Version: {__version__}{Colors.RESET}
+    """
+    print(banner)
+    print("="*80)
     
+    if config.log_to_file:
+        log.info(f"Execution log enabled: {os.path.abspath(log_file_path)}")
+    if config.verbose:
+        log.info("Verbose mode active (detailed debug output enabled)")
+
     if not config.run_scan:
-        print("[*] Scan disabled via --no-scan flag. Exiting.")
+        log.info("Scan disabled via --no-scan flag. Exiting.")
         return
         
-    # Step 1: Perform ONVIF WS-Discovery (multicast UDP) unless target override is present
+    # STAGE 1: Network & WS-Discovery
+    log.stage(1, 5, "Network Discovery & Target Port Scanning")
     if not config.targets_overridden:
         discovered_ips = ws_discover(timeout=config.ws_discovery_timeout)
         
@@ -112,15 +129,14 @@ def main():
                 
         added_count = len(config.targets) - original_targets_count
         if added_count > 0:
-            print(f"[+] Added {added_count} discovered ONVIF camera IP(s) to targets list.")
+            log.success(f"Added {added_count} discovered ONVIF camera IP(s) to targets list.")
     else:
-        print("[*] WS-Discovery disabled when active targets are explicitly specified via command line.")
+        log.info("WS-Discovery disabled when active targets are explicitly specified via command line.")
         
     if not config.targets:
-        print("[-] No scan targets specified in scan.cfg and none discovered via WS-Discovery. Exiting.")
+        log.warning("No scan targets specified in scan.cfg and none discovered via WS-Discovery. Exiting.")
         return
         
-    # Step 2: Concurrently scan open RTSP & ONVIF ports
     scan_results = scan_hosts(
         targets=config.targets,
         ports=config.scan_ports,
@@ -129,10 +145,11 @@ def main():
     )
     
     if not scan_results:
-        print("[-] No active hosts with open camera ports (RTSP/HTTP/ONVIF) were found. Exiting.")
+        log.warning("No active hosts with open camera ports (RTSP/HTTP/ONVIF) were found. Exiting.")
         return
         
-    # Step 3: Detailed protocol probing (ONVIF profiles / RTSP credentials brute force / ffprobe parameters)
+    # STAGE 2: Camera Protocol & Stream Probing
+    log.stage(2, 5, "Camera Protocol & Stream Specification Probing")
     camera_reports = probe_cameras(
         scan_results=scan_results,
         credentials=config.credentials,
@@ -140,12 +157,13 @@ def main():
     )
     
     if not camera_reports:
-        print("[-] Failed to retrieve details from any active cameras. Exiting.")
+        log.warning("Failed to retrieve details from any active cameras. Exiting.")
         return
         
-    # Step 4: Run Performance Tests if requested
+    # STAGE 3: Performance Testing
     perf_reports = None
     if config.run_perf:
+        log.stage(3, 5, "Performance & Network Latency Testing")
         perf_reports = run_performance_suite(
             camera_reports=camera_reports,
             ping_count=config.perf_ping_count,
@@ -153,16 +171,15 @@ def main():
             timeout=config.timeout,
             ffmpeg_socket_timeout=config.ffmpeg_socket_timeout
         )
+    else:
+        log.info("Performance suite skipped via --no-perf flag.")
         
-    # Step 5: Exporting & Outputs
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    os.makedirs(config.output_dir, exist_ok=True)
-
-    # Step 4.5: Generate Media Assets (Snapshot Images & Video Clips)
+    # STAGE 4: Media Asset Generation
     if config.run_image or config.run_video:
+        log.stage(4, 5, "Media Asset Capture (Snapshots & Clips)")
         generate_media_assets(
             camera_reports=camera_reports,
-            output_dir=config.output_dir,
+            output_dir=run_dir,
             credentials_list=config.credentials,
             timestamp=timestamp,
             run_image=config.run_image,
@@ -172,33 +189,43 @@ def main():
             jpeg_quality=config.snapshot_jpeg_quality,
             ffmpeg_socket_timeout=config.ffmpeg_socket_timeout
         )
+    else:
+        log.info("Media asset generation skipped via flags.")
     
-    # Export Terminal Output
+    # STAGE 5: Report Exporting & Indexing
+    log.stage(5, 5, "Report Generation & Archive Indexing")
+    
     if "terminal" in config.export_formats:
         table_output = format_terminal_table(camera_reports, perf_reports)
         print(table_output)
         
-    # Export CSV File
     if "csv" in config.export_formats:
         csv_filename = f"scan_report_{timestamp}.csv"
-        csv_path = os.path.join(config.output_dir, csv_filename)
+        csv_path = os.path.join(run_dir, csv_filename)
         export_csv(csv_path, camera_reports, perf_reports)
+        log.success(f"CSV report exported to: {csv_path}")
         
-    # Export JSON File (always required if HTML is requested for index page summaries)
     if "json" in config.export_formats or "html" in config.export_formats:
         json_filename = f"scan_report_{timestamp}.json"
-        json_path = os.path.join(config.output_dir, json_filename)
+        json_path = os.path.join(run_dir, json_filename)
         export_json(json_path, camera_reports, perf_reports)
+        log.success(f"JSON report exported to: {json_path}")
         
-    # Export HTML File
     if "html" in config.export_formats:
         html_filename = f"scan_report_{timestamp}.html"
-        html_path = os.path.join(config.output_dir, html_filename)
+        html_path = os.path.join(run_dir, html_filename)
         export_html(html_path, camera_reports, perf_reports)
+        log.success(f"HTML report exported to: {html_path}")
         
-    print("\n[+] CamMiner analysis finished.")
-    print(f"    Reports saved to directory: {os.path.abspath(config.output_dir)}")
-    print("="*80 + "\n")
+    # Rebuild top-level index.html linking all run subfolders
+    update_index_html(config.output_dir)
+        
+    print("\n" + "="*80)
+    log.success("CamMiner analysis finished successfully.")
+    print(f"    Run Directory:  {Colors.BOLD}{os.path.abspath(run_dir)}{Colors.RESET}")
+    print(f"    Master Archive: {Colors.BOLD}{os.path.abspath(os.path.join(config.output_dir, 'index.html'))}{Colors.RESET}")
+    print("="*80)
+    print(f"{Colors.DIM}Repository & Updates: https://github.com/flashbsb/camminer{Colors.RESET}\n")
 
 if __name__ == "__main__":
     try:

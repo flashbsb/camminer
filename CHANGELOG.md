@@ -5,6 +5,18 @@ All notable changes to the **CamMiner** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-07-19
+
+### Added
+- **ANSI Color Terminal Output (`core/logger.py`)**: Enhanced console UX with high-contrast ANSI colors, TTY detection (`sys.stdout.isatty()`), and `NO_COLOR` environment variable support.
+- **5-Stage Progress Workflow**: Structured execution feedback giving clear progress metrics across discovery, probing, performance, media capture, and report generation stages.
+- **Verbose Output Option (`--verbose` / `-v`)**: Enables detailed execution logs and protocol debug traces on stdout.
+- **Support Log File Generation (`--log`)**: Writes timestamped support logs (`camminer_YYYYMMDD_HHMMSS.log`) inside the run output directory.
+- **Timestamped Execution Subdirectories**: Output reports, media clips, and logs are now saved into isolated subfolders (`run_YYYYMMDD_HHMMSS/`) inside the output directory.
+- **Repository Credits**: Embedded repository links (`https://github.com/flashbsb/camminer`) in terminal footers and generated HTML report templates.
+
+---
+
 ## [1.4.0] - 2026-07-19
 
 ### Added

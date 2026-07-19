@@ -11,6 +11,7 @@ import hashlib
 import re
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from core.logger import logger
 
 # Set global default socket timeout to prevent indefinite urllib or socket hangs
 socket.setdefaulttimeout(4.0)

@@ -863,6 +863,12 @@ def export_html(output_path, camera_reports, perf_reports=None):
         </table>
     </div>
 
+    <!-- Repository Credit Footer -->
+    <footer style="margin-top: 2.5rem; padding: 1.5rem 0; border-top: 1px solid var(--border-color); text-align: center; color: var(--text-secondary); font-size: 0.85rem;">
+        Powered by <a href="https://github.com/flashbsb/camminer" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-weight: 600;">CamMiner</a> &mdash; Open Source IP Camera Discovery &amp; Analysis Utility.
+        Source code and updates: <a href="https://github.com/flashbsb/camminer" target="_blank" style="color: var(--accent-blue);">https://github.com/flashbsb/camminer</a>
+    </footer>
+
     <!-- Lightbox Modal -->
     <div id="mediaModalOverlay" class="modal-overlay" onclick="if(event.target === this) closeMediaModal();">
         <div class="modal-content-wrapper">
@@ -1023,14 +1029,14 @@ def export_html(output_path, camera_reports, perf_reports=None):
 
 def update_index_html(output_dir):
     """
-    Scans output_dir for JSON and HTML reports, parses summaries, and builds/updates an index.html index file.
+    Scans output_dir (and subdirectories) for JSON and HTML reports, parses summaries, and builds/updates index.html.
     """
     import glob
     print("[*] Rebuilding index.html archive page in output directory...")
     
-    # 1. Load details from JSON reports
-    search_pattern = os.path.join(output_dir, "scan_report_*.json")
-    json_files = glob.glob(search_pattern)
+    # 1. Load details from JSON reports (top-level and run_* subfolders)
+    json_files = glob.glob(os.path.join(output_dir, "scan_report_*.json"))
+    json_files.extend(glob.glob(os.path.join(output_dir, "run_*", "scan_report_*.json")))
     
     scans_history = []
     processed_html_files = set()
@@ -1068,10 +1074,10 @@ def update_index_html(output_dir):
             ips = [c.get("ip") for c in cameras]
             ips_str = ", ".join(ips)
             
-            base_name = os.path.basename(jpath).replace(".json", ".html")
-            html_path = base_name
+            html_abs = jpath.replace(".json", ".html")
+            rel_html_link = os.path.relpath(html_abs, output_dir)
             
-            if os.path.exists(os.path.join(output_dir, base_name)):
+            if os.path.exists(html_abs):
                 scans_history.append({
                     "time": formatted_time,
                     "raw_time": scan_time_str,
@@ -1080,18 +1086,19 @@ def update_index_html(output_dir):
                     "media": media_summary,
                     "score": avg_score,
                     "ips": ips_str,
-                    "link": html_path
+                    "link": rel_html_link
                 })
-                processed_html_files.add(base_name)
+                processed_html_files.add(os.path.basename(html_abs))
         except Exception as e:
             print(f"[-] Warning: Failed to parse history from {jpath}: {e}", file=sys.stderr)
             
     # 2. Check for legacy HTML reports that don't have matching JSON files
-    search_pattern_html = os.path.join(output_dir, "scan_report_*.html")
-    html_files = glob.glob(search_pattern_html)
+    html_files = glob.glob(os.path.join(output_dir, "scan_report_*.html"))
+    html_files.extend(glob.glob(os.path.join(output_dir, "run_*", "scan_report_*.html")))
     
     for hpath in html_files:
         base_name = os.path.basename(hpath)
+        rel_html_link = os.path.relpath(hpath, output_dir)
         if base_name not in processed_html_files:
             formatted_time = "Unknown"
             raw_time_fallback = base_name
@@ -1111,7 +1118,7 @@ def update_index_html(output_dir):
                 "media": "N/A",
                 "score": "N/A",
                 "ips": "Legacy Report (No JSON Metadata)",
-                "link": base_name
+                "link": rel_html_link
             })
             
     scans_history.sort(key=lambda x: x.get("raw_time", ""), reverse=True)
@@ -1366,6 +1373,12 @@ def update_index_html(output_dir):
             </tbody>
         </table>
     </div>
+
+    <!-- Repository Credit Footer -->
+    <footer style="margin-top: 2.5rem; padding: 1.5rem 0; border-top: 1px solid var(--border-color); text-align: center; color: var(--text-secondary); font-size: 0.85rem;">
+        Powered by <a href="https://github.com/flashbsb/camminer" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-weight: 600;">CamMiner</a> &mdash; Open Source IP Camera Discovery &amp; Analysis Utility.
+        Source code and updates: <a href="https://github.com/flashbsb/camminer" target="_blank" style="color: var(--accent-blue);">https://github.com/flashbsb/camminer</a>
+    </footer>
 
 </body>
 </html>
