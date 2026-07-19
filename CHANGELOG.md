@@ -5,6 +5,14 @@ All notable changes to the **CamMiner** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-07-19
+
+### Fixed
+- **HTML CSV Export Download (`core/exporter.py`)**: Replaced `URL.createObjectURL(blob)` with `data:text/csv;charset=utf-8,` data URIs in `exportFilteredCSV()` and `exportArchiveCSV()`. Fixes CSV export button clicks doing nothing in local `file://` browser origins.
+- **Unauthenticated Substream Discovery (`core/prober.py`)**: Allowed `brute_force_rtsp()` to collect up to 2 streams (`main` and `substream`) for unauthenticated RTSP servers. Enables complete substream detection on Macro-video / V380 cameras (`192.168.0.34`, `192.168.0.36`).
+
+---
+
 ## [1.6.0] - 2026-07-19
 
 ### Added

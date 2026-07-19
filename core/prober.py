@@ -769,7 +769,8 @@ class CameraProber:
                         # Verify with ffprobe to make sure it's a real stream
                         if self.verify_rtsp_url_ffprobe(rtsp_url, timeout=2.5) or is_valid_sdp(response):
                             self.add_brute_forced_stream(rtsp_url, (None, None), response)
-                            break # stop at first stream for wildcard to avoid duplicates
+                            if len(self.streams) >= 2:
+                                break
                     else:
                         if self.verify_rtsp_url_ffprobe(rtsp_url, timeout=2.5):
                             self.add_brute_forced_stream(rtsp_url, (None, None), response)

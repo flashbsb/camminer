@@ -1029,10 +1029,9 @@ def export_html(output_path, camera_reports, perf_reports=None):
             }});
 
             const csvContent = csvRows.map(e => e.map(val => '"' + String(val).replace(/"/g, '""') + '"').join(",")).join("\n");
-            const blob = new Blob([csvContent], {{ type: "text/csv;charset=utf-8;" }});
-            const url = URL.createObjectURL(blob);
+            const encodedUri = "data:text/csv;charset=utf-8," + encodeURIComponent(csvContent);
             const link = document.createElement("a");
-            link.setAttribute("href", url);
+            link.setAttribute("href", encodedUri);
             link.setAttribute("download", `camminer_filtered_report_${{new Date().toISOString().slice(0,10)}}.csv`);
             document.body.appendChild(link);
             link.click();
@@ -1510,10 +1509,9 @@ def update_index_html(output_dir):
             }});
 
             const csvContent = csvRows.map(e => e.map(val => '"' + String(val).replace(/"/g, '""') + '"').join(",")).join("\n");
-            const blob = new Blob([csvContent], {{ type: "text/csv;charset=utf-8;" }});
-            const url = URL.createObjectURL(blob);
+            const encodedUri = "data:text/csv;charset=utf-8," + encodeURIComponent(csvContent);
             const link = document.createElement("a");
-            link.setAttribute("href", url);
+            link.setAttribute("href", encodedUri);
             link.setAttribute("download", `camminer_archive_report_${{new Date().toISOString().slice(0,10)}}.csv`);
             document.body.appendChild(link);
             link.click();
