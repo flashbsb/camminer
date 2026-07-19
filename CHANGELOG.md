@@ -1,9 +1,24 @@
 # Changelog
 
-All notable changes to the **Antigravity CamMiner** project will be documented in this file.
+All notable changes to the **CamMiner** project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.4.0] - 2026-07-19
+
+### Added
+- **Externalized Configuration Variables (`config/settings.json`)**: Externalized all hardcoded network timeouts, thread pool sizes, JPEG quality scaling, and export formats into `config/settings.json`. Added `socket_timeout`, `port_scan_timeout`, `ws_discovery_timeout`, `rtsp_socket_timeout`, `ffmpeg_socket_timeout`, `media_max_threads`, `snapshot_jpeg_quality`, and `export_formats`.
+- **Automated Startup Dependency Validation (`check_dependencies`)**: Performs pre-execution checks for Python runtime (3.8+), core standard library modules, and required system binaries (`ffmpeg`, `ffprobe`, `ping`). Displays clear terminal error messages and OS-specific installation steps if requirements are missing.
+- **Project Requirements Document (`requirements.txt`)**: Centralized manifest documenting all runtime requirements, system executables, and standard library dependencies.
+
+### Changed
+- **Branding Standardized**: Rebranded project artifacts, User-Agent strings (`CamMiner/1.0`), headers, and output reports to standard `CamMiner`.
+
+### Fixed
+- **FFmpeg RTSP Timeout Flag (`-stimeout`)**: Replaced invalid RTSP demuxer `-timeout` flag with RTSP socket `-stimeout` in `core/media.py` and `core/performance.py`, resolving FFmpeg RTSP listen mode errors and enabling video clip recording.
+- **HTTP Snapshot Basic Authorization Header**: Explicitly injected base64 Basic Authorization headers into HTTP snapshot download requests in `core/media.py`, enabling snapshot downloads on cameras with unquoted/empty realm HTTP authentication.
+- **Full Credentials Sweep on Media Capture**: Removed arbitrary `credentials_list[:3]` limits in `core/media.py`, ensuring all credentials specified in `user.cfg` are tested during media capture.
 
 ---
 

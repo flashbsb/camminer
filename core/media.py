@@ -13,7 +13,7 @@ def build_authenticated_url(url, user, pwd):
         return f"{parts[0]}://{user}:{pwd}@{parts[1]}"
     return url
 
-def capture_single_image(ip, stream_url, snapshot_url, media_dir, username=None, password=None, credentials_list=None, video_filepath=None, timestamp=None, timeout=5.0):
+def capture_single_image(ip, stream_url, snapshot_url, media_dir, username=None, password=None, credentials_list=None, video_filepath=None, timestamp=None, timeout=5.0, jpeg_quality=2, ffmpeg_socket_timeout=3.0):
     """
     Captures a snapshot image for a camera stream.
     1. Tries HTTP download from snapshot_url using HTTP Basic & Digest authentication.
@@ -29,17 +29,14 @@ def capture_single_image(ip, stream_url, snapshot_url, media_dir, username=None,
 
     # Prepare credentials candidate list: [(username, password), ...]
     creds_to_try = []
-    if "@" in (stream_url or ""):
-        creds_to_try.append((None, None))
-    else:
-        if username is not None:
-            creds_to_try.append((username, password or ""))
-        if credentials_list:
-            for u, p in credentials_list[:3]:  # Top candidates
-                if (u, p) not in creds_to_try:
-                    creds_to_try.append((u, p or ""))
-        if (None, None) not in creds_to_try:
-            creds_to_try.insert(0, (None, None))
+    if username is not None or password is not None:
+        creds_to_try.append((username, password or ""))
+    if credentials_list:
+        for u, p in credentials_list:
+            if (u, p) not in creds_to_try:
+                creds_to_try.append((u, p or ""))
+    if (None, None) not in creds_to_try:
+        creds_to_try.insert(0, (None, None))
 
     # 1. First choice: Extract 1 frame from recorded local video MP4 file if available (instant 50ms, 0 extra network calls!)
     if video_filepath and os.path.exists(video_filepath) and os.path.getsize(video_filepath) > 1000:
@@ -51,7 +48,7 @@ def capture_single_image(ip, stream_url, snapshot_url, media_dir, username=None,
                 "-i", video_filepath,
                 "-frames:v", "1",
                 "-update", "1",
-                "-q:v", "2",
+                "-q:v", str(jpeg_quality),
                 filepath
             ]
             try:
@@ -63,38 +60,53 @@ def capture_single_image(ip, stream_url, snapshot_url, media_dir, username=None,
 
     # 2. Try HTTP snapshot URL if available
     if snapshot_url and snapshot_url.lower() != "none" and snapshot_url.startswith("http"):
+        import base64
         for u, p in creds_to_try:
             try:
                 auth_url = build_authenticated_url(snapshot_url, u, p) if u else snapshot_url
-                passman = urllib.request.HTTPPasswordMgrWithDefaultRealm()
-                if u and p:
-                    passman.add_password(None, auth_url, u, p)
-                    passman.add_password(None, snapshot_url, u, p)
+                headers = {"User-Agent": "CamMiner/1.0"}
+                if u is not None and p is not None:
+                    auth_str = base64.b64encode(f"{u}:{p}".encode('utf-8')).decode('utf-8')
+                    headers["Authorization"] = f"Basic {auth_str}"
                 
-                auth_handler = urllib.request.HTTPDigestAuthHandler(passman)
-                basic_handler = urllib.request.HTTPBasicAuthHandler(passman)
-                opener = urllib.request.build_opener(auth_handler, basic_handler)
-                req = urllib.request.Request(auth_url, headers={"User-Agent": "Antigravity-CamMiner/1.0"})
-                with opener.open(req, timeout=1.5) as resp:
+                req = urllib.request.Request(auth_url, headers=headers)
+                with urllib.request.urlopen(req, timeout=3.0) as resp:
                     data = resp.read()
                     if data and len(data) > 500:
                         with open(filepath, "wb") as f:
                             f.write(data)
                         return rel_path
             except Exception:
-                pass
+                try:
+                    passman = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+                    if u and p:
+                        passman.add_password(None, snapshot_url, u, p)
+                    auth_handler = urllib.request.HTTPDigestAuthHandler(passman)
+                    basic_handler = urllib.request.HTTPBasicAuthHandler(passman)
+                    opener = urllib.request.build_opener(auth_handler, basic_handler)
+                    req = urllib.request.Request(snapshot_url, headers={"User-Agent": "CamMiner/1.0"})
+                    with opener.open(req, timeout=3.0) as resp:
+                        data = resp.read()
+                        if data and len(data) > 500:
+                            with open(filepath, "wb") as f:
+                                f.write(data)
+                            return rel_path
+                except Exception:
+                    pass
 
     # 3. Fallback: FFmpeg RTSP frame grab
     if stream_url and stream_url.lower().startswith("rtsp"):
+        stimeout_us = str(int(ffmpeg_socket_timeout * 1000000))
         for u, p in creds_to_try:
             target_url = build_authenticated_url(stream_url, u, p) if u else stream_url
             cmd = [
                 "ffmpeg", "-y",
                 "-rtsp_transport", "tcp",
-                "-timeout", "2000000",
+                "-stimeout", stimeout_us,
                 "-i", target_url,
+                "-frames:v", "1",
                 "-update", "1",
-                "-q:v", "2",
+                "-q:v", str(jpeg_quality),
                 filepath
             ]
             try:
@@ -106,7 +118,7 @@ def capture_single_image(ip, stream_url, snapshot_url, media_dir, username=None,
 
     return None
 
-def capture_single_video(ip, stream_url, media_dir, username=None, password=None, credentials_list=None, timestamp=None, duration=5, timeout=8.0):
+def capture_single_video(ip, stream_url, media_dir, username=None, password=None, credentials_list=None, timestamp=None, duration=5, timeout=8.0, ffmpeg_socket_timeout=3.0):
     """
     Records an MP4 video clip from the camera RTSP stream URL using ffmpeg.
     First attempts stream copy (-c copy). Fallback to ultrafast H.264 transcode if stream copy fails.
@@ -121,20 +133,18 @@ def capture_single_video(ip, stream_url, media_dir, username=None, password=None
     filepath = os.path.join(media_dir, filename)
     rel_path = os.path.join("media", filename)
 
-    exec_timeout = float(duration) + 4.0
+    exec_timeout = float(duration) + 5.0
+    stimeout_us = str(int(ffmpeg_socket_timeout * 1000000))
 
     creds_to_try = []
-    if "@" in stream_url:
-        creds_to_try.append((None, None))
-    else:
-        if username is not None:
-            creds_to_try.append((username, password or ""))
-        if credentials_list:
-            for u, p in credentials_list[:3]:
-                if (u, p) not in creds_to_try:
-                    creds_to_try.append((u, p or ""))
-        if (None, None) not in creds_to_try:
-            creds_to_try.insert(0, (None, None))
+    if username is not None or password is not None:
+        creds_to_try.append((username, password or ""))
+    if credentials_list:
+        for u, p in credentials_list:
+            if (u, p) not in creds_to_try:
+                creds_to_try.append((u, p or ""))
+    if (None, None) not in creds_to_try:
+        creds_to_try.insert(0, (None, None))
 
     for u, p in creds_to_try:
         target_url = build_authenticated_url(stream_url, u, p) if u else stream_url
@@ -143,7 +153,7 @@ def capture_single_video(ip, stream_url, media_dir, username=None, password=None
         cmd_copy = [
             "ffmpeg", "-y",
             "-rtsp_transport", "tcp",
-            "-timeout", "2000000",
+            "-stimeout", stimeout_us,
             "-i", target_url,
             "-t", str(duration),
             "-c", "copy",
@@ -161,7 +171,7 @@ def capture_single_video(ip, stream_url, media_dir, username=None, password=None
         cmd_transcode = [
             "ffmpeg", "-y",
             "-rtsp_transport", "tcp",
-            "-timeout", "2000000",
+            "-stimeout", stimeout_us,
             "-i", target_url,
             "-t", str(duration),
             "-c:v", "libx264",
@@ -179,7 +189,7 @@ def capture_single_video(ip, stream_url, media_dir, username=None, password=None
 
     return None
 
-def process_camera_media(ip, camera_data, output_dir, credentials_list=None, timestamp=None, run_image=True, run_video=True, duration=5):
+def process_camera_media(ip, camera_data, output_dir, credentials_list=None, timestamp=None, run_image=True, run_video=True, duration=5, jpeg_quality=2, ffmpeg_socket_timeout=3.0):
     """
     Processes image snapshot and video clip for a single camera report entry.
     Returns (ip, image_rel_path, video_rel_path).
@@ -204,7 +214,8 @@ def process_camera_media(ip, camera_data, output_dir, credentials_list=None, tim
             ip, stream_url, media_dir, 
             username=username, password=password, 
             credentials_list=credentials_list, 
-            timestamp=timestamp, duration=duration
+            timestamp=timestamp, duration=duration,
+            ffmpeg_socket_timeout=ffmpeg_socket_timeout
         )
         if video_rel_path:
             video_abs_path = os.path.join(output_dir, video_rel_path)
@@ -216,12 +227,14 @@ def process_camera_media(ip, camera_data, output_dir, credentials_list=None, tim
             username=username, password=password, 
             credentials_list=credentials_list,
             video_filepath=video_abs_path, 
-            timestamp=timestamp
+            timestamp=timestamp,
+            jpeg_quality=jpeg_quality,
+            ffmpeg_socket_timeout=ffmpeg_socket_timeout
         )
 
     return ip, image_rel_path, video_rel_path
 
-def generate_media_assets(camera_reports, output_dir, credentials_list=None, timestamp=None, run_image=True, run_video=True, duration=5):
+def generate_media_assets(camera_reports, output_dir, credentials_list=None, timestamp=None, run_image=True, run_video=True, duration=5, max_workers=10, jpeg_quality=2, ffmpeg_socket_timeout=3.0):
     """
     Concurrently captures images and videos for all active discovered cameras.
     Modifies camera_reports in-place adding 'image_file' and 'video_file'.
@@ -238,12 +251,13 @@ def generate_media_assets(camera_reports, output_dir, credentials_list=None, tim
         print("[-] No active camera streams available for media capture.")
         return
 
-    with ThreadPoolExecutor(max_workers=min(10, len(active_cameras))) as executor:
+    worker_count = min(max_workers, len(active_cameras)) if max_workers > 0 else len(active_cameras)
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {}
         for cam in active_cameras:
             ip = cam["ip"]
             print(f"[*] Dispatching media capture tasks for {ip}...")
-            f = executor.submit(process_camera_media, ip, cam, output_dir, credentials_list, timestamp, run_image, run_video, duration)
+            f = executor.submit(process_camera_media, ip, cam, output_dir, credentials_list, timestamp, run_image, run_video, duration, jpeg_quality, ffmpeg_socket_timeout)
             futures[f] = cam
 
         for future in as_completed(futures):

@@ -5,12 +5,13 @@ import sys
 import time
 
 class PerformanceTester:
-    def __init__(self, ip, streams, ping_count=5, stream_duration=5, timeout=5.0):
+    def __init__(self, ip, streams, ping_count=5, stream_duration=5, timeout=5.0, ffmpeg_socket_timeout=3.0):
         self.ip = ip
         self.streams = streams
         self.ping_count = ping_count
         self.stream_duration = stream_duration
         self.timeout = timeout
+        self.ffmpeg_socket_timeout = ffmpeg_socket_timeout
         
         self.ping_loss = 100.0
         self.ping_avg_rtt = 0.0
@@ -40,40 +41,42 @@ class PerformanceTester:
         print(f"  [*] Pinging host ({self.ping_count} packets)...")
         # Run ping command (using standard flags for Linux)
         cmd = ["ping", "-c", str(self.ping_count), "-W", "2", self.ip]
+        
         try:
             startupinfo = None
             if os.name == 'nt':
-                # Windows support just in case
                 cmd = ["ping", "-n", str(self.ping_count), "-w", "2000", self.ip]
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12.0, startupinfo=startupinfo)
-            if res.returncode == 0:
-                output = res.stdout
+            out = res.stdout
+            
+            # Parse Linux ping output format:
+            # "5 packets transmitted, 5 received, 0% packet loss, time 4005ms"
+            # "rtt min/avg/max/mdev = 1.234/5.678/9.012/0.345 ms"
+            loss_match = re.search(r'(\d+(?:\.\d+)?)%\s*(?:packet\s*)?loss', out, re.IGNORECASE)
+            if loss_match:
+                self.ping_loss = float(loss_match.group(1))
                 
-                # Parse packet loss
-                loss_match = re.search(r"(\d+)%\s+packet\s+loss", output)
-                if loss_match:
-                    self.ping_loss = float(loss_match.group(1))
-                    
-                # Parse RTT stats (min/avg/max/mdev)
-                # E.g. rtt min/avg/max/mdev = 1.208/1.208/1.208/0.000 ms
-                rtt_match = re.search(r"(?:rtt|round-trip)\s+min/avg/max/(?:mdev|stddev)\s*=\s*([\d\.]+)/([\d\.]+)/([\d\.]+)/([\d\.]+)", output)
-                if rtt_match:
-                    self.ping_avg_rtt = float(rtt_match.group(2))
-                    self.ping_jitter = float(rtt_match.group(4)) # standard deviation serves as a proxy for jitter
-                else:
-                    # Windows parsing support
-                    times = [float(x) for x in re.findall(r"time=(\d+)ms", output)]
+            rtt_match = re.search(r'(?:rtt|round-trip)\s*min/avg/max/(?:mdev|stddev)\s*=\s*[\d\.]+/([\d\.]+)/[\d\.]+/([\d\.]+)', out, re.IGNORECASE)
+            if rtt_match:
+                self.ping_avg_rtt = float(rtt_match.group(1))
+                self.ping_jitter = float(rtt_match.group(2)) # standard deviation serves as a proxy for jitter
+            else:
+                # Windows ping parsing: "Average = 12ms"
+                win_avg = re.search(r'Average\s*=\s*(\d+)ms', out, re.IGNORECASE)
+                if win_avg:
+                    times = [float(t) for t in re.findall(r'time[=<](\d+)ms', out, re.IGNORECASE)]
                     if times:
                         self.ping_avg_rtt = sum(times) / len(times)
                         self.ping_loss = 100.0 - (len(times) * 20.0)
-                        # Estimate jitter from variance
+                        
                         if len(times) > 1:
                             mean = self.ping_avg_rtt
                             self.ping_jitter = (sum((x - mean) ** 2 for x in times) / (len(times) - 1)) ** 0.5
                             
+            if self.ping_loss < 100.0:
                 print(f"    [+] Packet Loss: {self.ping_loss}% | Avg Latency: {self.ping_avg_rtt:.1f}ms | Jitter: {self.ping_jitter:.2f}ms")
             else:
                 print("    [-] Host ping failed (no response or unreachable).")
@@ -95,9 +98,11 @@ class PerformanceTester:
             
             # Use ffmpeg to record statistics about the stream
             # We copy codecs and dump to null. This reads raw frames without decoding CPU overhead.
+            stimeout_us = str(int(self.ffmpeg_socket_timeout * 1000000))
             cmd = [
                 "ffmpeg",
                 "-rtsp_transport", "tcp",
+                "-stimeout", stimeout_us,
                 "-y",
                 "-i", url,
                 "-t", str(self.stream_duration),         # customizable test duration
@@ -216,7 +221,7 @@ class PerformanceTester:
                     "duration": 0
                 }
 
-def run_performance_suite(camera_reports, ping_count=5, stream_duration=5, timeout=5.0):
+def run_performance_suite(camera_reports, ping_count=5, stream_duration=5, timeout=5.0, ffmpeg_socket_timeout=3.0):
     """
     Runs the performance tester on each successfully probed camera.
     """
@@ -236,7 +241,8 @@ def run_performance_suite(camera_reports, ping_count=5, stream_duration=5, timeo
                 streams, 
                 ping_count=ping_count, 
                 stream_duration=stream_duration, 
-                timeout=timeout
+                timeout=timeout,
+                ffmpeg_socket_timeout=ffmpeg_socket_timeout
             )
             perf_reports[ip] = tester.run_tests()
         else:

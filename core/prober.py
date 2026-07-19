@@ -60,7 +60,7 @@ def send_soap_request(url, xml_payload, timeout=3.0):
     """
     headers = {
         "Content-Type": "application/soap+xml; charset=utf-8",
-        "User-Agent": "Antigravity-CamMiner/1.0"
+        "User-Agent": "CamMiner/1.0"
     }
     req = urllib.request.Request(url, data=xml_payload.encode('utf-8'), headers=headers, method="POST")
     try:
@@ -110,7 +110,7 @@ def verify_rtsp_url_raw(rtsp_url, timeout=1.5):
         req = (
             f"DESCRIBE rtsp://{host}:{port}{path} RTSP/1.0\r\n"
             f"CSeq: 1\r\n"
-            f"User-Agent: Antigravity-CamMiner/1.0\r\n"
+            f"User-Agent: CamMiner/1.0\r\n"
             f"{auth_header}"
             f"Accept: application/sdp\r\n\r\n"
         )
@@ -174,7 +174,7 @@ def check_digest_auth(rtsp_url, username, password, www_auth_header, timeout=1.5
         req = (
             f"DESCRIBE {uri} RTSP/1.0\r\n"
             f"CSeq: 2\r\n"
-            f"User-Agent: Antigravity-CamMiner/1.0\r\n"
+            f"User-Agent: CamMiner/1.0\r\n"
             f"Authorization: {auth_str}\r\n"
             f"Accept: application/sdp\r\n\r\n"
         )
@@ -286,7 +286,7 @@ def authenticate_rtsp_url(rtsp_url, credentials, timeout=1.5):
         req = (
             f"DESCRIBE rtsp://{host}:{port}{path} RTSP/1.0\r\n"
             f"CSeq: 2\r\n"
-            f"User-Agent: Antigravity-CamMiner/1.0\r\n"
+            f"User-Agent: CamMiner/1.0\r\n"
             f"{auth_header}"
             f"Accept: application/sdp\r\n\r\n"
         )
@@ -319,6 +319,10 @@ class CameraProber:
         self.credentials = credentials
         self.settings = settings
         self.timeout = settings.timeout
+        self.rtsp_socket_timeout = getattr(settings, "rtsp_socket_timeout", 1.5)
+        self.ffmpeg_socket_timeout = getattr(settings, "ffmpeg_socket_timeout", 3.0)
+        if hasattr(settings, "socket_timeout"):
+            socket.setdefaulttimeout(settings.socket_timeout)
         
         # Discovered information
         self.manufacturer = "Unknown"
@@ -843,10 +847,11 @@ class CameraProber:
         """
         stream_info = self.streams[name]
         url = stream_info["url"]
+        stimeout_us = str(int(self.ffmpeg_socket_timeout * 1000000))
         cmd = [
             "ffprobe",
             "-rtsp_transport", "tcp",
-            "-timeout", "3000000", # 3 seconds
+            "-stimeout", stimeout_us,
             "-v", "error",
             "-show_format",
             "-show_streams",

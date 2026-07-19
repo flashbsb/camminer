@@ -12,7 +12,14 @@ class Config:
         self.output_dir = "infos"
         
         self.timeout = 3.0
+        self.socket_timeout = 4.0
+        self.port_scan_timeout = 1.0
+        self.ws_discovery_timeout = 2.0
+        self.rtsp_socket_timeout = 1.5
+        self.ffmpeg_socket_timeout = 3.0
         self.threads = 20
+        self.media_max_threads = 10
+        self.snapshot_jpeg_quality = 2
         self.scan_ports = [554, 8554, 80, 8080, 8888, 5000, 3702]
         self.common_rtsp_paths = []
         
@@ -32,7 +39,7 @@ class Config:
 
     def parse_args(self):
         parser = argparse.ArgumentParser(
-            description="Antigravity CamMiner - Multi-vendor IP Camera Scanning & Analysis Utility"
+            description="CamMiner - Multi-vendor IP Camera Scanning & Analysis Utility"
         )
         parser.add_argument(
             "-s", "--settings",
@@ -76,7 +83,7 @@ class Config:
         )
         parser.add_argument(
             "-f", "--format",
-            default="terminal,csv,html",
+            default=None,
             help="Output formats (comma-separated: terminal,csv,html,json. default: terminal,csv,html)"
         )
         parser.add_argument(
@@ -103,7 +110,8 @@ class Config:
         self.run_perf = not args.no_perf
         self.run_image = not args.no_image
         self.run_video = not args.no_video
-        self.export_formats = [fmt.strip().lower() for fmt in args.format.split(",")]
+        if args.format:
+            self.export_formats = [fmt.strip().lower() for fmt in args.format.split(",")]
         
         # Load from files
         self.load_settings()
@@ -137,12 +145,21 @@ class Config:
                     with open(path, "r", encoding="utf-8") as f:
                         data = json.load(f)
                         self.timeout = float(data.get("timeout", self.timeout))
+                        self.socket_timeout = float(data.get("socket_timeout", self.socket_timeout))
+                        self.port_scan_timeout = float(data.get("port_scan_timeout", self.port_scan_timeout))
+                        self.ws_discovery_timeout = float(data.get("ws_discovery_timeout", self.ws_discovery_timeout))
+                        self.rtsp_socket_timeout = float(data.get("rtsp_socket_timeout", self.rtsp_socket_timeout))
+                        self.ffmpeg_socket_timeout = float(data.get("ffmpeg_socket_timeout", self.ffmpeg_socket_timeout))
                         self.threads = int(data.get("threads", self.threads))
+                        self.media_max_threads = int(data.get("media_max_threads", self.media_max_threads))
+                        self.snapshot_jpeg_quality = int(data.get("snapshot_jpeg_quality", self.snapshot_jpeg_quality))
                         self.scan_ports = list(data.get("scan_ports", self.scan_ports))
                         self.common_rtsp_paths = list(data.get("common_rtsp_paths", self.common_rtsp_paths))
                         self.output_dir = data.get("default_output_dir", self.output_dir)
                         self.perf_ping_count = int(data.get("perf_ping_count", self.perf_ping_count))
                         self.perf_stream_duration = int(data.get("perf_stream_duration", self.perf_stream_duration))
+                        if "export_formats" in data and isinstance(data["export_formats"], list):
+                            self.export_formats = [fmt.strip().lower() for fmt in data["export_formats"]]
                         settings_loaded = True
                         break
                 except Exception as e:

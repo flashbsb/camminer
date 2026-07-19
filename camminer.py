@@ -2,6 +2,7 @@
 import os
 import sys
 import socket
+import shutil
 from datetime import datetime
 
 # Set global default socket timeout to prevent indefinite urllib or socket hangs
@@ -17,16 +18,71 @@ from core.performance import run_performance_suite
 from core.media import generate_media_assets
 from core.exporter import format_terminal_table, export_csv, export_html, export_json
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
+
+def check_dependencies():
+    """
+    Validates Python runtime version, standard library modules, and required system binaries.
+    If any dependency is missing, displays detailed terminal instructions and exits.
+    """
+    missing_deps = []
+    
+    # 1. Python version check
+    if sys.version_info < (3, 8):
+        current_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        missing_deps.append(f"Python 3.8+ required (Current version: {current_ver})")
+        
+    # 2. Standard library modules check
+    required_modules = [
+        "socket", "urllib.request", "xml.etree.ElementTree",
+        "concurrent.futures", "ipaddress", "subprocess",
+        "argparse", "json", "csv", "shutil"
+    ]
+    for mod in required_modules:
+        try:
+            __import__(mod)
+        except ImportError:
+            missing_deps.append(f"Python module '{mod}'")
+            
+    # 3. System binaries check
+    required_binaries = ["ffmpeg", "ffprobe", "ping"]
+    for binary in required_binaries:
+        if shutil.which(binary) is None:
+            missing_deps.append(f"System binary '{binary}' (Not found in PATH)")
+            
+    if missing_deps:
+        print("\n" + "="*80)
+        print("[-] ERROR: Unmet dependencies detected!")
+        print("="*80)
+        print("The following required dependencies were not found:\n")
+        for dep in missing_deps:
+            print(f"  - {dep}")
+        print("\n" + "="*80)
+        print("INSTALLATION PROCEDURES (Refer to requirements.txt):")
+        print("="*80)
+        print("""
+1. Linux (Debian / Ubuntu):
+   sudo apt update
+   sudo apt install -y ffmpeg iputils-ping python3
+
+2. macOS (Homebrew):
+   brew install ffmpeg
+
+3. Arch Linux:
+   sudo pacman -S ffmpeg iputils python
+
+4. Windows:
+   - Download FFmpeg & FFprobe binaries from https://ffmpeg.org/download.html
+   - Add the FFmpeg bin directory to system PATH.
+   - Install Python 3.8+ from https://python.org
+
+For complete dependency details, see requirements.txt in the project root.
+""" + "="*80 + "\n")
+        sys.exit(1)
 
 def main():
+    check_dependencies()
     banner = f"""
-    ██████╗ ███████╗████████╗██████╗  ██████╗  ██████╗  ██████╗ ███████╗██████╗ 
-   ██╔════╝ ██╔════╝╚══██╔══╝██╔══██╗██╔═══██╗██╔════╝ ██╔════╝ ██╔════╝██╔══██╗
-   ██║  ███╗███████╗   ██║   ██████╔╝██║   ██║██║  ███╗██║  ███╗█████╗  ██████╔╝
-   ██║   ██║╚════██║   ██║   ██╔══██╗██║   ██║██║   ██║██║   ██║██╔══╝  ██╔══██╗
-   ╚██████╔╝███████║   ██║   ██║  ██║╚██████╔╝╚██████╔╝╚██████╔╝███████╗██║  ██║
-    ╚═════╝ ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝  ╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝
              IP Camera Discovery & Analysis Utility
                                  Version: {__version__}
     """
@@ -37,13 +93,16 @@ def main():
     config = Config()
     config.parse_args()
     
+    # Apply global socket timeout from settings.json
+    socket.setdefaulttimeout(config.socket_timeout)
+    
     if not config.run_scan:
         print("[*] Scan disabled via --no-scan flag. Exiting.")
         return
         
     # Step 1: Perform ONVIF WS-Discovery (multicast UDP) unless target override is present
     if not config.targets_overridden:
-        discovered_ips = ws_discover()
+        discovered_ips = ws_discover(timeout=config.ws_discovery_timeout)
         
         # Merge discovered IPs into scan targets
         original_targets_count = len(config.targets)
@@ -66,7 +125,7 @@ def main():
         targets=config.targets,
         ports=config.scan_ports,
         threads=config.threads,
-        timeout=config.timeout
+        timeout=config.port_scan_timeout
     )
     
     if not scan_results:
@@ -91,7 +150,8 @@ def main():
             camera_reports=camera_reports,
             ping_count=config.perf_ping_count,
             stream_duration=config.perf_stream_duration,
-            timeout=5.0
+            timeout=config.timeout,
+            ffmpeg_socket_timeout=config.ffmpeg_socket_timeout
         )
         
     # Step 5: Exporting & Outputs
@@ -107,7 +167,10 @@ def main():
             timestamp=timestamp,
             run_image=config.run_image,
             run_video=config.run_video,
-            duration=config.perf_stream_duration
+            duration=config.perf_stream_duration,
+            max_workers=config.media_max_threads,
+            jpeg_quality=config.snapshot_jpeg_quality,
+            ffmpeg_socket_timeout=config.ffmpeg_socket_timeout
         )
     
     # Export Terminal Output
@@ -133,7 +196,7 @@ def main():
         html_path = os.path.join(config.output_dir, html_filename)
         export_html(html_path, camera_reports, perf_reports)
         
-    print("\n[+] Antigravity CamMiner analysis finished.")
+    print("\n[+] CamMiner analysis finished.")
     print(f"    Reports saved to directory: {os.path.abspath(config.output_dir)}")
     print("="*80 + "\n")
 

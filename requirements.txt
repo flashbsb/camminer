@@ -1,0 +1,11 @@
+# CamMiner Requirements & Dependencies
+# Minimum Python Version: 3.8+
+#
+# Note: CamMiner relies entirely on the Python Standard Library (socket, urllib, xml.etree.ElementTree,
+# concurrent.futures, ipaddress, argparse, json, csv, subprocess, shutil, etc.).
+# No external PyPI packages (pip install) are required.
+
+# System Binary Executables (Must be available in system PATH):
+# 1. ffmpeg  - Required for media asset generation (snapshot extraction and video clip recording) & live stream throughput tests.
+# 2. ffprobe - Required for detailed RTSP stream probing, format inspection, and codec resolution.
+# 3. ping    - Required for network diagnostics (packet loss, latency, and jitter measurements).

@@ -629,7 +629,7 @@ def export_html(output_path, camera_reports, perf_reports=None):
 
     <header>
         <div>
-            <h1>Antigravity CamMiner</h1>
+            <h1>CamMiner</h1>
             <p>IP Camera Network Assessment and NVR Compatibility Analysis Report</p>
         </div>
         <div class="timestamp">

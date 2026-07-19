@@ -1,6 +1,21 @@
 {
   "timeout": 3.0,
+  "socket_timeout": 4.0,
+  "port_scan_timeout": 1.0,
+  "ws_discovery_timeout": 2.0,
+  "rtsp_socket_timeout": 1.5,
+  "ffmpeg_socket_timeout": 3.0,
   "threads": 10,
+  "media_max_threads": 10,
+  "snapshot_jpeg_quality": 2,
+  "perf_ping_count": 5,
+  "perf_stream_duration": 5,
+  "default_output_dir": "infos",
+  "export_formats": [
+    "terminal",
+    "csv",
+    "html"
+  ],
   "scan_ports": [
     554,
     8554,
@@ -10,8 +25,6 @@
     5000,
     3702
   ],
-  "perf_ping_count": 5,
-  "perf_stream_duration": 5,
   "common_rtsp_paths": [
     "/11",
     "/12",
@@ -34,6 +47,5 @@
     "/Streaming/Channels/2",
     "/user={username}_password={password}_channel=1_stream=0&onvif=0.sdp?real_st",
     "/user={username}_password={password}_channel=1_stream=1&onvif=0.sdp?real_st"
-  ],
-  "default_output_dir": "infos"
+  ]
 }

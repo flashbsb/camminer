@@ -1,11 +1,17 @@
-# Configs containing camera credentials
-#config/scan.cfg
-#config/user.cfg
+# Environment and credentials safety
+.env
+.env.*
+*.secret
+*.pem
+*.key
+*.log
 
-# Local output reports
+# Local output reports and data dumps
 infos*
+output*/
+reports*/
 
-# Python caching & environment
+# Python caching & virtual environments
 __pycache__/
 *.pyc
 *.pyo
@@ -15,9 +21,12 @@ env/
 venv/
 .pytest_cache/
 
-# Agents
-.agents
+# OS & Editor artifacts
+.DS_Store
+.vscode/
+.idea/
 
-#temp and test
+# Agents & local temporary files
+.agents
 test*
 temp*
