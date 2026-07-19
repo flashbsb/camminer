@@ -128,6 +128,28 @@ def export_json(output_path, camera_reports, perf_reports=None):
         print(f"[-] Failed to export JSON report: {e}", file=sys.stderr)
         return False
 
+def get_camera_status_category(cam, perf_reports=None):
+    """
+    Determines unified camera status category ('ready', 'warning', 'error')
+    considering both NVR score and real-time performance test diagnostics.
+    """
+    ip = cam["ip"]
+    score = cam["nvr_score"]
+    
+    if not cam.get("streams"):
+        return "error"
+        
+    perf = perf_reports.get(ip, {}) if perf_reports else {}
+    m_perf = perf.get("streams", {}).get("main", {}) if perf else {}
+    perf_status = m_perf.get("status", "")
+    
+    if perf_status in ["Stream Interrupted", "Offline"] or score < 50:
+        return "error"
+    elif perf_status == "Critical Frame Drop" or score < 90 or len(cam["streams"]) < 2:
+        return "warning"
+    else:
+        return "ready"
+
 def export_html(output_path, camera_reports, perf_reports=None):
     """
     Generates a premium, responsive dark-themed HTML dashboard reporting scan findings.
@@ -145,10 +167,10 @@ def export_html(output_path, camera_reports, perf_reports=None):
         avg_score = round(sum(c["nvr_score"] for c in camera_reports) / total_cams)
         
     for c in camera_reports:
-        score = c["nvr_score"]
-        if score >= 90:
+        cat = get_camera_status_category(c, perf_reports)
+        if cat == "ready":
             ready_count += 1
-        elif score >= 50:
+        elif cat == "warning":
             warning_count += 1
         else:
             error_count += 1
@@ -768,18 +790,16 @@ def export_html(output_path, camera_reports, perf_reports=None):
         if c["username"] or c["password"]:
             user_desc = f"<code>{c['username']}:{c['password']}</code>"
             
-        badge_class = "badge-success"
-        score_color = "var(--success)"
-        filter_status = "ready"
-        
-        if c["nvr_score"] < 50:
+        filter_status = get_camera_status_category(c, perf_reports)
+        if filter_status == "error":
             badge_class = "badge-error"
             score_color = "var(--error)"
-            filter_status = "error"
-        elif c["nvr_score"] < 90:
+        elif filter_status == "warning":
             badge_class = "badge-warning"
             score_color = "var(--warning)"
-            filter_status = "warning"
+        else:
+            badge_class = "badge-success"
+            score_color = "var(--success)"
             
         # Streams
         main_stream = c["streams"].get("main", {})
@@ -1022,79 +1042,94 @@ def export_html(output_path, camera_reports, perf_reports=None):
                 const rowData = [];
                 cells.forEach(cell => {{
                     // Clean up text content and remove double spaces
-                    let text = cell.innerText.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
+                    let text = cell.innerText.replace(/\\n+/g, " ").replace(/\\s+/g, " ").trim();
                     rowData.push(text);
                 }});
                 csvRows.push(rowData);
             }});
 
-            const csvContent = csvRows.map(e => e.map(val => '"' + String(val).replace(/"/g, '""') + '"').join(",")).join("\n");
-            const encodedUri = "data:text/csv;charset=utf-8," + encodeURIComponent(csvContent);
-            const link = document.createElement("a");
-            link.setAttribute("href", encodedUri);
-            link.setAttribute("download", `camminer_filtered_report_${{new Date().toISOString().slice(0,10)}}.csv`);
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            const csvContent = csvRows.map(e => e.map(val => '"' + String(val).replace(/"/g, '""') + '"').join(",")).join("\\n");
+            try {{
+                const blob = new Blob(["\uFEFF" + csvContent], {{ type: "text/csv;charset=utf-8;" }});
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.setAttribute("href", url);
+                link.setAttribute("download", `camminer_filtered_report_${{new Date().toISOString().slice(0,10)}}.csv`);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                setTimeout(() => {{
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                }}, 200);
+            }} catch (err) {{
+                console.error("Export CSV failed:", err);
+                alert("Failed to export CSV: " + err.message);
+            }}
         }}
 
-        // Codec Chart
-        const codecsCtx = document.getElementById('codecsChart').getContext('2d');
-        const codecsChart = new Chart(codecsCtx, {{
-            type: 'pie',
-            data: {{
-                labels: {json.dumps(codec_labels)},
-                datasets: [{{
-                    data: {json.dumps(codec_data)},
-                    backgroundColor: [
-                        '#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#6b7280'
-                    ],
-                    borderWidth: 0
-                }}]
-            }},
-            options: {{
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {{
-                    legend: {{
-                        position: 'right',
-                        labels: {{
-                            color: '#9ca3af',
-                            font: {{ family: 'Outfit' }}
+        // Codec & Resolution Charts
+        if (typeof Chart !== 'undefined') {{
+            try {{
+                const codecsCtx = document.getElementById('codecsChart').getContext('2d');
+                new Chart(codecsCtx, {{
+                    type: 'pie',
+                    data: {{
+                        labels: {json.dumps(codec_labels)},
+                        datasets: [{{
+                            data: {json.dumps(codec_data)},
+                            backgroundColor: [
+                                '#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#6b7280'
+                            ],
+                            borderWidth: 0
+                        }}]
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {{
+                            legend: {{
+                                position: 'right',
+                                labels: {{
+                                    color: '#9ca3af',
+                                    font: {{ family: 'Outfit' }}
+                                }}
+                            }}
                         }}
                     }}
-                }}
-            }}
-        }});
+                }});
 
-        // Resolutions Chart
-        const resCtx = document.getElementById('resolutionsChart').getContext('2d');
-        const resChart = new Chart(resCtx, {{
-            type: 'doughnut',
-            data: {{
-                labels: {json.dumps(res_labels)},
-                datasets: [{{
-                    data: {json.dumps(res_data)},
-                    backgroundColor: [
-                        '#6366f1', '#ec4899', '#14b8a6', '#f59e0b', '#6b7280'
-                    ],
-                    borderWidth: 0
-                }}]
-            }},
-            options: {{
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {{
-                    legend: {{
-                        position: 'right',
-                        labels: {{
-                            color: '#9ca3af',
-                            font: {{ family: 'Outfit' }}
+                const resCtx = document.getElementById('resolutionsChart').getContext('2d');
+                new Chart(resCtx, {{
+                    type: 'doughnut',
+                    data: {{
+                        labels: {json.dumps(res_labels)},
+                        datasets: [{{
+                            data: {json.dumps(res_data)},
+                            backgroundColor: [
+                                '#6366f1', '#ec4899', '#14b8a6', '#f59e0b', '#6b7280'
+                            ],
+                            borderWidth: 0
+                        }}]
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {{
+                            legend: {{
+                                position: 'right',
+                                labels: {{
+                                    color: '#9ca3af',
+                                    font: {{ family: 'Outfit' }}
+                                }}
+                            }}
                         }}
                     }}
-                }}
+                }});
+            }} catch (e) {{
+                console.error("Chart initialization failed: ", e);
             }}
-        }});
+        }}
     </script>
 </body>
 </html>
@@ -1502,20 +1537,30 @@ def update_index_html(output_dir):
 
                 const rowData = [];
                 cells.forEach(cell => {{
-                    let text = cell.innerText.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
+                    let text = cell.innerText.replace(/\\n+/g, " ").replace(/\\s+/g, " ").trim();
                     rowData.push(text);
                 }});
                 csvRows.push(rowData);
             }});
 
-            const csvContent = csvRows.map(e => e.map(val => '"' + String(val).replace(/"/g, '""') + '"').join(",")).join("\n");
-            const encodedUri = "data:text/csv;charset=utf-8," + encodeURIComponent(csvContent);
-            const link = document.createElement("a");
-            link.setAttribute("href", encodedUri);
-            link.setAttribute("download", `camminer_archive_report_${{new Date().toISOString().slice(0,10)}}.csv`);
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            const csvContent = csvRows.map(e => e.map(val => '"' + String(val).replace(/"/g, '""') + '"').join(",")).join("\\n");
+            try {{
+                const blob = new Blob(["\uFEFF" + csvContent], {{ type: "text/csv;charset=utf-8;" }});
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.setAttribute("href", url);
+                link.setAttribute("download", `camminer_archive_report_${{new Date().toISOString().slice(0,10)}}.csv`);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                setTimeout(() => {{
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                }}, 200);
+            }} catch (err) {{
+                console.error("Export Archive CSV failed:", err);
+                alert("Failed to export archive CSV: " + err.message);
+            }}
         }}
     </script>
 

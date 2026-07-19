@@ -5,6 +5,15 @@ All notable changes to the **CamMiner** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.2] - 2026-07-19
+
+### Fixed
+- **Summary Cards & Diagnostic Status Alignment (`core/exporter.py`)**: Added `get_camera_status_category()` helper function to unify summary card metrics (`Ready`, `Warnings`, `Suboptimal`) and table row filtering with active performance test diagnostics (`Stream Interrupted`, `Critical Frame Drop`, `Offline`).
+- **Browser CSV Export Reliability (`core/exporter.py`)**: Updated `exportFilteredCSV()` and `exportArchiveCSV()` to use `Blob(["\uFEFF" + csvContent])` with `URL.createObjectURL(blob)` and UTF-8 Byte Order Mark (BOM), ensuring instant CSV downloads across all modern desktop/mobile browsers.
+- **Safe Chart.js Initialization (`core/exporter.py`)**: Wrapped Chart.js script execution in `typeof Chart !== 'undefined'` and `try-catch` blocks to prevent uncaught CDN/script exceptions from breaking page interactions.
+
+---
+
 ## [1.6.1] - 2026-07-19
 
 ### Fixed
