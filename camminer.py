@@ -19,7 +19,7 @@ from core.performance import run_performance_suite
 from core.media import generate_media_assets
 from core.exporter import format_terminal_table, export_csv, export_html, export_json, update_index_html
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 def check_dependencies():
     """

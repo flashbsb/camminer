@@ -26,11 +26,12 @@
     3702
   ],
   "common_rtsp_paths": [
+    "/live/ch00_1",
+    "/live/ch00_2",
     "/11",
     "/12",
     "/stream1",
     "/stream2",
-    "/live/ch00_1",
     "/live/ch0",
     "/live/ch1",
     "/onvif1",

@@ -677,16 +677,17 @@ class CameraProber:
         cred_desc = f"'{user}:{pwd}'" if user else "No Authentication"
         print(f"    [+] Found working RTSP stream at: {rtsp_url} using {cred_desc}")
 
-    def verify_rtsp_url_ffprobe(self, rtsp_url, timeout=2.0):
+    def verify_rtsp_url_ffprobe(self, rtsp_url, timeout=2.5):
         """
-        Checks if an RTSP URL is actually streamable using ffprobe.
+        Checks if an RTSP URL is actually streamable and contains a valid video stream with resolution > 0.
         """
+        stimeout_us = str(int(timeout * 1000000))
         cmd = [
             "ffprobe",
             "-rtsp_transport", "tcp",
-            "-timeout", str(int(timeout * 1000000)),
+            "-stimeout", stimeout_us,
             "-v", "error",
-            "-show_entries", "format=format_name",
+            "-show_entries", "stream=width,height,codec_type",
             "-of", "json",
             rtsp_url
         ]
@@ -695,8 +696,16 @@ class CameraProber:
             if os.name == 'nt':
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout + 1.0, startupinfo=startupinfo)
-            return res.returncode == 0
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout + 2.0, startupinfo=startupinfo)
+            if res.returncode == 0 and res.stdout:
+                data = json.loads(res.stdout)
+                for s in data.get("streams", []):
+                    if s.get("codec_type") == "video":
+                        w = s.get("width", 0) or 0
+                        h = s.get("height", 0) or 0
+                        if w > 0 and h > 0:
+                            return True
+            return False
         except Exception:
             return False
 
@@ -742,7 +751,7 @@ class CameraProber:
                         status, auth_req, response = verify_rtsp_url_raw(rtsp_url, timeout=1.0)
                         if status == "valid":
                             if is_unauth_wildcard or is_cred_wildcard:
-                                if self.verify_rtsp_url_ffprobe(rtsp_url, timeout=1.5) or is_valid_sdp(response):
+                                if self.verify_rtsp_url_ffprobe(rtsp_url, timeout=2.5) or is_valid_sdp(response):
                                     self.add_brute_forced_stream(rtsp_url, (user, pwd), response)
                                     break
                             else:
@@ -758,13 +767,14 @@ class CameraProber:
                 if status == "valid":
                     if is_unauth_wildcard:
                         # Verify with ffprobe to make sure it's a real stream
-                        if self.verify_rtsp_url_ffprobe(rtsp_url, timeout=1.5) or is_valid_sdp(response):
+                        if self.verify_rtsp_url_ffprobe(rtsp_url, timeout=2.5) or is_valid_sdp(response):
                             self.add_brute_forced_stream(rtsp_url, (None, None), response)
                             break # stop at first stream for wildcard to avoid duplicates
                     else:
-                        self.add_brute_forced_stream(rtsp_url, (None, None), response)
-                        if len(self.streams) >= 2:
-                            return
+                        if self.verify_rtsp_url_ffprobe(rtsp_url, timeout=2.5):
+                            self.add_brute_forced_stream(rtsp_url, (None, None), response)
+                            if len(self.streams) >= 2:
+                                return
                 elif status == "unauthorized":
                     www_auth_match = re.search(r'WWW-Authenticate:\s*(.*)', response, re.IGNORECASE)
                     www_auth = www_auth_match.group(0) if www_auth_match else ""
@@ -869,7 +879,7 @@ class CameraProber:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=5.0,
+                timeout=10.0,
                 startupinfo=startupinfo
             )
             if res.returncode == 0:

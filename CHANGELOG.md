@@ -5,6 +5,23 @@ All notable changes to the **CamMiner** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-07-19
+
+### Added
+- **Real-Time Interactive Text Filter (`core/exporter.py`)**: Added live search inputs to individual scan report dashboards and the master archive index. Allows instantaneous client-side filtering by IP address, camera model, manufacturer, stream resolution, codec, credentials, performance status, or recommendation text.
+- **Client-Side CSV Export (`core/exporter.py`)**: Added an "Export CSV" button to generated HTML reports. Allows users to export only the currently displayed / filtered camera findings directly into a downloaded CSV file (`camminer_filtered_report.csv` / `camminer_archive_report.csv`).
+
+---
+
+## [1.5.1] - 2026-07-19
+
+### Fixed
+- **Stream Frame Validation (`core/prober.py`)**: Enhanced `verify_rtsp_url_ffprobe()` to verify active frame dimensions (`width > 0` and `height > 0`). Resolves dummy stream selection on Macro-video / V380 RTSP servers (`192.168.0.34`, `192.168.0.36`).
+- **Low-FPS Stream Probing Timeout (`core/prober.py`)**: Increased `analyze_single_stream()` `ffprobe` timeout from 5s to 10s. Fixes resolution detection timing out as `"Unknown"` on low-FPS cameras (`192.168.0.26`).
+- **RTSP Path Prioritization (`config/settings.json`)**: Prioritized `/live/ch00_1` and `/live/ch00_2` in `common_rtsp_paths`.
+
+---
+
 ## [1.5.0] - 2026-07-19
 
 ### Added

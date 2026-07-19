@@ -336,6 +336,54 @@ def export_html(output_path, camera_reports, perf_reports=None):
             justify-content: space-between;
             align-items: center;
             margin-bottom: 1rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }}
+
+        .controls-actions {{
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }}
+
+        .search-input {{
+            background-color: var(--surface-color);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 0.5rem 0.85rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            min-width: 240px;
+        }}
+
+        .search-input:focus {{
+            border-color: var(--primary-light);
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+        }}
+
+        .btn-export {{
+            background-color: #059669;
+            color: #ffffff;
+            border: 1px solid #10b981;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-family: inherit;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }}
+
+        .btn-export:hover {{
+            background-color: #10b981;
+            border-color: #34d399;
         }}
 
         .filter-buttons {{
@@ -680,11 +728,15 @@ def export_html(output_path, camera_reports, perf_reports=None):
     <!-- Controls -->
     <div class="controls-row">
         <h3>Camera Scan & Diagnostics Table</h3>
-        <div class="filter-buttons">
-            <button class="filter-btn active" onclick="filterTable('all')">All</button>
-            <button class="filter-btn" onclick="filterTable('ready')">Ready</button>
-            <button class="filter-btn" onclick="filterTable('warning')">Warnings</button>
-            <button class="filter-btn" onclick="filterTable('error')">Suboptimal</button>
+        <div class="controls-actions">
+            <input type="text" id="searchInput" class="search-input" placeholder="Search IP, Model, Codec..." oninput="applyFilters()">
+            <div class="filter-buttons">
+                <button class="filter-btn active" data-status-filter="all" onclick="setFilterStatus('all')">All</button>
+                <button class="filter-btn" data-status-filter="ready" onclick="setFilterStatus('ready')">Ready</button>
+                <button class="filter-btn" data-status-filter="warning" onclick="setFilterStatus('warning')">Warnings</button>
+                <button class="filter-btn" data-status-filter="error" onclick="setFilterStatus('error')">Suboptimal</button>
+            </div>
+            <button class="btn btn-export" onclick="exportFilteredCSV()">Export CSV</button>
         </div>
     </div>
 
@@ -924,31 +976,67 @@ def export_html(output_path, camera_reports, perf_reports=None):
             }});
         }}
 
-        // Filters the table displays
-        function filterTable(status) {{
-            const rows = document.querySelectorAll("#camTableBody tr");
+        let activeStatusFilter = 'all';
+
+        function setFilterStatus(status) {{
+            activeStatusFilter = status;
             const buttons = document.querySelectorAll(".filter-btn");
-            
-            // Set active button
             buttons.forEach(btn => {{
-                if (btn.getAttribute("onclick").includes("'" + status + "'")) {{
+                if (btn.getAttribute("data-status-filter") === status) {{
                     btn.classList.add("active");
                 }} else {{
                     btn.classList.remove("active");
                 }}
             }});
-            
+            applyFilters();
+        }}
+
+        function applyFilters() {{
+            const query = (document.getElementById("searchInput")?.value || "").toLowerCase().trim();
+            const rows = document.querySelectorAll("#camTableBody tr");
+
             rows.forEach(row => {{
-                if (status === "all") {{
+                const rowStatus = row.getAttribute("data-status");
+                const matchesStatus = (activeStatusFilter === "all" || rowStatus === activeStatusFilter);
+                const textContent = row.innerText.toLowerCase();
+                const matchesText = !query || textContent.includes(query);
+
+                if (matchesStatus && matchesText) {{
                     row.style.display = "";
                 }} else {{
-                    if (row.getAttribute("data-status") === status) {{
-                        row.style.display = "";
-                    }} else {{
-                        row.style.display = "none";
-                    }}
+                    row.style.display = "none";
                 }}
             }});
+        }}
+
+        function exportFilteredCSV() {{
+            const rows = document.querySelectorAll("#camTableBody tr");
+            const headers = ["Camera IP / Model", "Credentials Used", "Main Stream Details", "Substream Details", "Performance Stats", "NVR Score", "Recommendations & Diagnostics"];
+            const csvRows = [headers];
+
+            rows.forEach(row => {{
+                if (row.style.display === "none") return;
+                const cells = row.querySelectorAll("td");
+                if (cells.length < 7) return;
+
+                const rowData = [];
+                cells.forEach(cell => {{
+                    // Clean up text content and remove double spaces
+                    let text = cell.innerText.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
+                    rowData.push(text);
+                }});
+                csvRows.push(rowData);
+            }});
+
+            const csvContent = csvRows.map(e => e.map(val => '"' + String(val).replace(/"/g, '""') + '"').join(",")).join("\n");
+            const blob = new Blob([csvContent], {{ type: "text/csv;charset=utf-8;" }});
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", `camminer_filtered_report_${{new Date().toISOString().slice(0,10)}}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         }}
 
         // Codec Chart
@@ -1318,6 +1406,14 @@ def update_index_html(output_dir):
         </div>
     </div>
 
+    <div class="controls-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+        <h3>Historical Assessment Reports</h3>
+        <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <input type="text" id="archiveSearchInput" style="background-color: var(--surface-color); border: 1px solid var(--border-color); color: var(--text-main); padding: 0.5rem 0.85rem; border-radius: 8px; font-size: 0.85rem; font-family: inherit; outline: none; min-width: 240px;" placeholder="Search timestamp, target IPs..." oninput="filterArchiveTable()">
+            <button class="btn" style="background-color: #059669; border-color: #10b981;" onclick="exportArchiveCSV()">Export CSV</button>
+        </div>
+    </div>
+
     <div class="table-container">
         <table>
             <thead>
@@ -1330,7 +1426,7 @@ def update_index_html(output_dir):
                     <th>Report Link</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="archiveTableBody">
 """
     
     if not scans_history:
@@ -1379,6 +1475,51 @@ def update_index_html(output_dir):
         Powered by <a href="https://github.com/flashbsb/camminer" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-weight: 600;">CamMiner</a> &mdash; Open Source IP Camera Discovery &amp; Analysis Utility.
         Source code and updates: <a href="https://github.com/flashbsb/camminer" target="_blank" style="color: var(--accent-blue);">https://github.com/flashbsb/camminer</a>
     </footer>
+
+    <script>
+        function filterArchiveTable() {{
+            const query = (document.getElementById("archiveSearchInput")?.value || "").toLowerCase().trim();
+            const rows = document.querySelectorAll("#archiveTableBody tr");
+
+            rows.forEach(row => {{
+                const textContent = row.innerText.toLowerCase();
+                if (!query || textContent.includes(query)) {{
+                    row.style.display = "";
+                }} else {{
+                    row.style.display = "none";
+                }}
+            }});
+        }}
+
+        function exportArchiveCSV() {{
+            const rows = document.querySelectorAll("#archiveTableBody tr");
+            const headers = ["Scan Timestamp", "Cameras (Total / Active)", "Media Assets", "Avg Compatibility Score", "Target IPs Scanned", "Report Link"];
+            const csvRows = [headers];
+
+            rows.forEach(row => {{
+                if (row.style.display === "none") return;
+                const cells = row.querySelectorAll("td");
+                if (cells.length < 6) return;
+
+                const rowData = [];
+                cells.forEach(cell => {{
+                    let text = cell.innerText.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
+                    rowData.push(text);
+                }});
+                csvRows.push(rowData);
+            }});
+
+            const csvContent = csvRows.map(e => e.map(val => '"' + String(val).replace(/"/g, '""') + '"').join(",")).join("\n");
+            const blob = new Blob([csvContent], {{ type: "text/csv;charset=utf-8;" }});
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", `camminer_archive_report_${{new Date().toISOString().slice(0,10)}}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }}
+    </script>
 
 </body>
 </html>
