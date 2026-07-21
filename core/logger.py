@@ -16,9 +16,19 @@ class Colors:
 
     @classmethod
     def setup_colors(cls):
-        # Enable VT100 processing on Windows terminal
+        # Enable VT100 processing on Windows terminal via ctypes
         if os.name == 'nt':
-            os.system('')
+            try:
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+                mode = ctypes.c_ulong()
+                if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                    kernel32.SetConsoleMode(handle, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+                else:
+                    os.system('')
+            except Exception:
+                os.system('')
         # Disable colors if stdout is redirected or NO_COLOR environment variable is set
         if not sys.stdout.isatty() or os.getenv('NO_COLOR'):
             cls.CYAN = ''

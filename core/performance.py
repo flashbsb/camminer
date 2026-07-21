@@ -44,18 +44,19 @@ class PerformanceTester:
         
         try:
             startupinfo = None
+            creationflags = 0
             if os.name == 'nt':
                 cmd = ["ping", "-n", str(self.ping_count), "-w", "2000", self.ip]
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                if hasattr(subprocess, 'CREATE_NO_WINDOW'):
+                    creationflags = subprocess.CREATE_NO_WINDOW
                 
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12.0, startupinfo=startupinfo)
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12.0, startupinfo=startupinfo, creationflags=creationflags)
             out = res.stdout
             
-            # Parse Linux ping output format:
-            # "5 packets transmitted, 5 received, 0% packet loss, time 4005ms"
-            # "rtt min/avg/max/mdev = 1.234/5.678/9.012/0.345 ms"
-            loss_match = re.search(r'(\d+(?:\.\d+)?)%\s*(?:packet\s*)?loss', out, re.IGNORECASE)
+            # Parse Linux & Windows ping output format (Loss %):
+            loss_match = re.search(r'(\d+(?:\.\d+)?)%\s*(?:packet\s*)?(?:loss|perda)', out, re.IGNORECASE)
             if loss_match:
                 self.ping_loss = float(loss_match.group(1))
                 
@@ -64,17 +65,18 @@ class PerformanceTester:
                 self.ping_avg_rtt = float(rtt_match.group(1))
                 self.ping_jitter = float(rtt_match.group(2)) # standard deviation serves as a proxy for jitter
             else:
-                # Windows ping parsing: "Average = 12ms"
-                win_avg = re.search(r'Average\s*=\s*(\d+)ms', out, re.IGNORECASE)
-                if win_avg:
-                    times = [float(t) for t in re.findall(r'time[=<](\d+)ms', out, re.IGNORECASE)]
-                    if times:
-                        self.ping_avg_rtt = sum(times) / len(times)
-                        self.ping_loss = 100.0 - (len(times) * 20.0)
-                        
-                        if len(times) > 1:
-                            mean = self.ping_avg_rtt
-                            self.ping_jitter = (sum((x - mean) ** 2 for x in times) / (len(times) - 1)) ** 0.5
+                # Windows ping parsing: "Average = 12ms", "Média = 12ms", "time=12ms", "tempo=12ms", "time<1ms"
+                win_avg = re.search(r'(?:Average|Média)\s*=\s*(\d+)ms', out, re.IGNORECASE)
+                times = [float(t) for t in re.findall(r'(?:time|tempo)[=<](\d+)ms', out, re.IGNORECASE)]
+                if times:
+                    self.ping_avg_rtt = sum(times) / len(times)
+                    if loss_match is None:
+                        self.ping_loss = max(0.0, ((self.ping_count - len(times)) / float(self.ping_count)) * 100.0)
+                    if len(times) > 1:
+                        mean = self.ping_avg_rtt
+                        self.ping_jitter = (sum((x - mean) ** 2 for x in times) / (len(times) - 1)) ** 0.5
+                elif win_avg:
+                    self.ping_avg_rtt = float(win_avg.group(1))
                             
             if self.ping_loss < 100.0:
                 print(f"    [+] Packet Loss: {self.ping_loss}% | Avg Latency: {self.ping_avg_rtt:.1f}ms | Jitter: {self.ping_jitter:.2f}ms")
@@ -114,16 +116,20 @@ class PerformanceTester:
             t_start = time.time()
             try:
                 startupinfo = None
+                creationflags = 0
                 if os.name == 'nt':
                     startupinfo = subprocess.STARTUPINFO()
                     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    if hasattr(subprocess, 'CREATE_NO_WINDOW'):
+                        creationflags = subprocess.CREATE_NO_WINDOW
                     
                 res = subprocess.run(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     timeout=self.stream_duration + 5.0,  # timeout in case stream freezes
-                    startupinfo=startupinfo
+                    startupinfo=startupinfo,
+                    creationflags=creationflags
                 )
                 
                 t_elapsed = time.time() - t_start
@@ -244,7 +250,36 @@ def run_performance_suite(camera_reports, ping_count=5, stream_duration=5, timeo
                 timeout=timeout,
                 ffmpeg_socket_timeout=ffmpeg_socket_timeout
             )
-            perf_reports[ip] = tester.run_tests()
+            res = tester.run_tests()
+            perf_reports[ip] = res
+            
+            # Inject Network Health Diagnostics into camera recommendations
+            if res["ping_jitter"] > 15.0:
+                report["recommendations"].append(f"[Network Warning] High network jitter detected ({res['ping_jitter']:.1f}ms). May cause video stream stuttering or dropped keyframes.")
+            if res["ping_loss"] > 2.0:
+                report["recommendations"].append(f"[Network Alert] Packet loss detected ({res['ping_loss']:.1f}%). May cause grey H.264/H.265 artifacts or video macroblocking.")
+            m_perf = res["streams"].get("main", {})
+            if m_perf.get("bitrate_kbps", 0) > 0:
+                meas_mbps = round(m_perf["bitrate_kbps"] / 1000.0, 2)
+                meas_gb_day = round(meas_mbps * 10.8, 1)
+                report["est_storage_gb_day"] = meas_gb_day
+                report["recommendations"] = [
+                    r if not r.startswith("[Storage Estimate] Main") else f"[Storage Estimate] Main stream (measured {meas_mbps} Mbps) consumes ~{meas_gb_day} GB/day for continuous NVR recording."
+                    for r in report["recommendations"]
+                ]
+
+            s_perf = res["streams"].get("substream", {})
+            if s_perf.get("bitrate_kbps", 0) > 0:
+                sub_meas_mbps = round(s_perf["bitrate_kbps"] / 1000.0, 2)
+                sub_meas_gb_day = round(sub_meas_mbps * 10.8, 1)
+                report["est_sub_storage_gb_day"] = sub_meas_gb_day
+                report["recommendations"] = [
+                    r if not r.startswith("[Storage Estimate] Substream") else f"[Storage Estimate] Substream (measured {sub_meas_mbps} Mbps) adds ~{sub_meas_gb_day} GB/day if dual-stream recording is enabled."
+                    for r in report["recommendations"]
+                ]
+
+            if m_perf.get("status") == "Critical Frame Drop" or (m_perf.get("fps", 0) > 0 and m_perf.get("fps", 0) < 5.0):
+                report["recommendations"].append(f"[Performance Warning] Main stream experiencing severe frame drops (Delivered FPS: {m_perf.get('fps')}). Check camera bandwidth or network switch capacity.")
         else:
             print(f"\n[-] Skipping performance tests for {ip} (no active RTSP streams found).")
             

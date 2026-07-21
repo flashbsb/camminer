@@ -9,15 +9,18 @@ def format_terminal_table(camera_reports, perf_reports=None):
     Renders a structured ASCII table of findings to print in the console.
     """
     lines = []
-    lines.append("\n" + "="*112)
-    lines.append(f"| {'CAMERA IP':<15} | {'MANUFACTURER':<14} | {'MODEL':<14} | {'NVR SCORE':<9} | {'MAIN STREAM':<15} | {'SUBSTREAM':<15} | {'STATUS':<20} |")
-    lines.append("="*112)
+    lines.append("\n" + "="*136)
+    lines.append(f"| {'CAMERA IP':<15} | {'MAC ADDRESS':<17} | {'MANUFACTURER':<14} | {'NVR SCORE':<9} | {'MAIN STREAM':<15} | {'SUBSTREAM':<15} | {'GB/DAY':<7} | {'STATUS':<20} |")
+    lines.append("="*136)
     
+    total_gb = 0.0
     for cam in camera_reports:
         ip = cam["ip"]
+        mac = cam.get("mac_address", "N/A")[:17]
         manufacturer = cam["manufacturer"][:14]
-        model = cam["model"][:14]
         score = f"{cam['nvr_score']}%"
+        gb_day = cam.get("est_storage_gb_day", 0.0)
+        total_gb += gb_day
         
         main_info = "N/A"
         main_stream = cam["streams"].get("main")
@@ -37,9 +40,10 @@ def format_terminal_table(camera_reports, perf_reports=None):
                 if m_perf:
                     status = f"{status} ({m_perf['status']})"
                     
-        lines.append(f"| {ip:<15} | {manufacturer:<14} | {model:<14} | {score:<9} | {main_info:<15} | {sub_info:<15} | {status:<20} |")
+        lines.append(f"| {ip:<15} | {mac:<17} | {manufacturer:<14} | {score:<9} | {main_info:<15} | {sub_info:<15} | {gb_day:<7.1f} | {status:<20} |")
         
-    lines.append("="*112)
+    lines.append("="*136)
+    lines.append(f"[*] Total Estimated 24h Storage Requirement (Main Stream NVR Recording): {total_gb:.1f} GB/day (~{total_gb / 10.8:.2f} Mbps)")
     return "\n".join(lines)
 
 def export_csv(output_path, camera_reports, perf_reports=None):
@@ -47,9 +51,10 @@ def export_csv(output_path, camera_reports, perf_reports=None):
     Exports details to a flat CSV file.
     """
     fieldnames = [
-        "ip", "manufacturer", "model", "firmware", "username", "password", "nvr_score",
-        "main_url", "main_resolution", "main_codec", "main_fps",
-        "sub_url", "sub_resolution", "sub_codec", "sub_fps",
+        "ip", "mac_address", "mac_vendor", "manufacturer", "model", "firmware", "username", "password",
+        "has_ptz", "has_events", "est_storage_gb_day", "nvr_score",
+        "main_url", "main_resolution", "main_codec", "main_fps", "main_audio",
+        "sub_url", "sub_resolution", "sub_codec", "sub_fps", "sub_audio",
         "ping_avg_rtt_ms", "ping_loss_percent", "ping_jitter_ms",
         "main_test_fps", "main_test_bitrate_kbps", "main_test_status",
         "sub_test_fps", "sub_test_bitrate_kbps", "sub_test_status",
@@ -75,20 +80,27 @@ def export_csv(output_path, camera_reports, perf_reports=None):
                 
                 row = {
                     "ip": ip,
+                    "mac_address": cam.get("mac_address", "N/A"),
+                    "mac_vendor": cam.get("mac_vendor", "N/A"),
                     "manufacturer": cam["manufacturer"],
                     "model": cam["model"],
                     "firmware": cam["firmware"],
                     "username": cam["username"] or "",
                     "password": cam["password"] or "",
+                    "has_ptz": "Yes" if cam.get("has_ptz") else "No",
+                    "has_events": "Yes" if cam.get("has_events") else "No",
+                    "est_storage_gb_day": cam.get("est_storage_gb_day", 0.0),
                     "nvr_score": cam["nvr_score"],
                     "main_url": main_st.get("url", ""),
                     "main_resolution": main_st.get("resolution", ""),
                     "main_codec": main_st.get("codec", ""),
                     "main_fps": main_st.get("fps", ""),
+                    "main_audio": main_st.get("audio", ""),
                     "sub_url": sub_st.get("url", ""),
                     "sub_resolution": sub_st.get("resolution", ""),
                     "sub_codec": sub_st.get("codec", ""),
                     "sub_fps": sub_st.get("fps", ""),
+                    "sub_audio": sub_st.get("audio", ""),
                     "ping_avg_rtt_ms": perf.get("ping_avg_rtt", ""),
                     "ping_loss_percent": perf.get("ping_loss", ""),
                     "ping_jitter_ms": perf.get("ping_jitter", ""),
@@ -186,11 +198,66 @@ def export_html(output_path, camera_reports, perf_reports=None):
             codecs_dict["NONE"] = codecs_dict.get("NONE", 0) + 1
             resolutions_dict["NONE"] = resolutions_dict.get("NONE", 0) + 1
 
+    total_storage = sum(c.get("est_storage_gb_day", 0.0) for c in camera_reports)
+    total_sub_storage = sum(c.get("est_sub_storage_gb_day", 0.0) for c in camera_reports)
+
     # Format data lists for Chart.js
     codec_labels = list(codecs_dict.keys())
     codec_data = list(codecs_dict.values())
     res_labels = list(resolutions_dict.keys())
     res_data = list(resolutions_dict.values())
+
+    # Build Integration Snippets
+    ha_lines = ["camera:"]
+    frigate_lines = ["cameras:"]
+    shinobi_list = []
+    vlc_lines = []
+
+    for i, c in enumerate(camera_reports):
+        cam_name = f"camera_{c['ip'].replace('.', '_')}"
+        main_st = c["streams"].get("main", {})
+        sub_st = c["streams"].get("substream", {})
+        main_url = main_st.get("url", "")
+        sub_url = sub_st.get("url", "") or main_url
+
+        if main_url:
+            ha_lines.append(f"  - platform: generic")
+            ha_lines.append(f"    name: \"{c['manufacturer']} {c['model']} ({c['ip']})\"")
+            ha_lines.append(f"    stream_source: \"{main_url}\"")
+            if main_st.get("snapshot_url", "None") != "None":
+                ha_lines.append(f"    still_image_url: \"{main_st['snapshot_url']}\"")
+
+            frigate_lines.append(f"  {cam_name}:")
+            frigate_lines.append(f"    ffmpeg:")
+            frigate_lines.append(f"      inputs:")
+            frigate_lines.append(f"        - path: \"{main_url}\"")
+            frigate_lines.append(f"          roles:")
+            frigate_lines.append(f"            - record")
+            if sub_url and sub_url != main_url:
+                frigate_lines.append(f"        - path: \"{sub_url}\"")
+                frigate_lines.append(f"          roles:")
+                frigate_lines.append(f"            - detect")
+
+            shinobi_list.append({
+                "mid": cam_name,
+                "name": f"{c['manufacturer']} {c['model']}",
+                "host": c['ip'],
+                "type": "h264",
+                "full_url": main_url,
+                "sub_url": sub_url
+            })
+
+            vlc_lines.append(f"# {c['manufacturer']} {c['model']} ({c['ip']}) - Main Stream")
+            vlc_lines.append(main_url)
+            if sub_url and sub_url != main_url:
+                vlc_lines.append(f"# {c['manufacturer']} {c['model']} ({c['ip']}) - Substream")
+                vlc_lines.append(sub_url)
+            vlc_lines.append("")
+
+    ha_yaml = "\n".join(ha_lines)
+    frigate_yaml = "\n".join(frigate_lines)
+    shinobi_json = json.dumps(shinobi_list, indent=2)
+    vlc_links = "\n".join(vlc_lines)
     
     # HTML template structure
     html_content = f"""<!DOCTYPE html>
@@ -232,6 +299,25 @@ def export_html(output_path, camera_reports, perf_reports=None):
             color: var(--text-main);
             line-height: 1.5;
             padding: 2rem;
+        }}
+
+        .tab-btn {{
+            background-color: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--text-secondary);
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: color 0.2s ease, border-color 0.2s ease;
+        }}
+        .tab-btn.active {{
+            color: var(--primary-light);
+            border-bottom-color: var(--primary-light);
+        }}
+        .tab-btn:hover {{
+            color: var(--text-main);
         }}
 
         header {{
@@ -729,6 +815,10 @@ def export_html(output_path, camera_reports, perf_reports=None):
             <div class="card-title">Average Compatibility</div>
             <div class="card-value">{avg_score}%</div>
         </div>
+        <div class="card">
+            <div class="card-title">Est. Storage Total</div>
+            <div class="card-value" style="font-size: 1.8rem; margin-top: 0.25rem;">{total_storage:.1f} <span style="font-size:0.85rem; font-weight:normal; color:var(--text-secondary);">GB/day</span></div>
+        </div>
     </div>
 
     <!-- Visual Charts -->
@@ -845,10 +935,16 @@ def export_html(output_path, camera_reports, perf_reports=None):
         recs_list_html = ""
         for rec in c["recommendations"]:
             class_mod = ""
-            if "[Security Alert]" in rec or "[Error]" in rec:
+            if "[Security Alert]" in rec or "[Error]" in rec or "[Network Alert]" in rec:
                 class_mod = 'style="color:var(--error); font-weight:500;"'
-            elif "[Security Warning]" in rec or "[Performance Warning]" in rec:
+            elif "[Security Warning]" in rec or "[Performance Warning]" in rec or "[Network Warning]" in rec:
                 class_mod = 'style="color:var(--warning); font-weight:500;"'
+            elif "[Audio Note]" in rec or "[Compatibility Note]" in rec:
+                class_mod = 'style="color:#a5b4fc; font-weight:500;"'
+            elif "[ONVIF Feature]" in rec:
+                class_mod = 'style="color:#38bdf8; font-weight:500;"'
+            elif "[Storage Estimate]" in rec:
+                class_mod = 'style="color:var(--primary-light); font-weight:500;"'
             elif "[Success]" in rec:
                 class_mod = 'style="color:var(--success);"'
             recs_list_html += f"<li {class_mod}>{rec}</li>"
@@ -875,15 +971,25 @@ def export_html(output_path, camera_reports, perf_reports=None):
                 '''
             media_html += '</div>'
             
+        mac_addr = c.get("mac_address", "N/A")
+        mac_vend = c.get("mac_vendor", "N/A")
+        ptz_badge = '<span class="badge badge-success" style="margin-right:0.25rem;">PTZ</span>' if c.get("has_ptz") else ''
+        events_badge = '<span class="badge badge-info">Events</span>' if c.get("has_events") else ''
+        badges_html = f'<div style="margin-top:0.35rem;">{ptz_badge}{events_badge}</div>' if (ptz_badge or events_badge) else ''
+        est_gb = c.get("est_storage_gb_day", 0.0)
+
         html_content += f"""
                 <tr data-status="{filter_status}">
                     <td>
                         <b style="font-size:1.05rem">{ip}</b><br>
                         <span style="color:var(--text-secondary); font-size:0.85rem">
-                            Vendor: {manufacturer}<br>
+                            Vendor: <b>{manufacturer}</b><br>
                             Model: {model}<br>
-                            FW: {fw}
+                            FW: {fw}<br>
+                            MAC: <code class="mono-text" style="font-size:0.75rem">{mac_addr}</code> ({mac_vend})<br>
+                            Storage Est: <b style="color:var(--primary-light);">{est_gb} GB/day</b>
                         </span>
+                        {badges_html}
                         {media_html}
                     </td>
                     <td style="font-size:0.85rem">
@@ -935,6 +1041,109 @@ def export_html(output_path, camera_reports, perf_reports=None):
         </table>
     </div>
 
+    <!-- Storage & Network Bandwidth Calculator Section -->
+    <div class="calculator-card" style="background-color: var(--surface-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem; margin-top: 2rem;">
+        <h3 style="margin-bottom: 0.5rem; font-size: 1.2rem; color: #a5b4fc;">Storage & Bandwidth Estimator</h3>
+        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1.25rem;">Estimated disk storage and network throughput requirements for 24/7 continuous NVR recording based on Main Streams (<strong>{total_storage:.1f} GB/day</strong>). If dual-stream recording (Main + Substream) is enabled, total storage requirement is <strong>~{total_storage + total_sub_storage:.1f} GB/day</strong>.</p>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+            <div style="background-color: rgba(255,255,255,0.03); padding: 1rem; border-radius: 8px; border: 1px solid var(--border-color);">
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase;">24-Hour Daily Storage</div>
+                <div style="font-size: 1.6rem; font-weight: 700; color: var(--text-main); margin-top: 0.25rem;">{total_storage:.1f} <span style="font-size:0.9rem; font-weight:normal;">GB/day</span></div>
+            </div>
+            <div style="background-color: rgba(255,255,255,0.03); padding: 1rem; border-radius: 8px; border: 1px solid var(--border-color);">
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase;">7-Day Weekly Storage</div>
+                <div style="font-size: 1.6rem; font-weight: 700; color: var(--text-main); margin-top: 0.25rem;">{total_storage * 7:.1f} <span style="font-size:0.9rem; font-weight:normal;">GB/week</span></div>
+            </div>
+            <div style="background-color: rgba(255,255,255,0.03); padding: 1rem; border-radius: 8px; border: 1px solid var(--border-color);">
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase;">30-Day Monthly Storage</div>
+                <div style="font-size: 1.6rem; font-weight: 700; color: var(--text-main); margin-top: 0.25rem;">{(total_storage * 30 / 1024.0):.2f} <span style="font-size:0.9rem; font-weight:normal;">TB/month</span></div>
+            </div>
+            <div style="background-color: rgba(255,255,255,0.03); padding: 1rem; border-radius: 8px; border: 1px solid var(--border-color);">
+                <div style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase;">Est. Total Bandwidth</div>
+                <div style="font-size: 1.6rem; font-weight: 700; color: var(--success); margin-top: 0.25rem;">{(total_storage * 1024 * 8 / 86400.0):.2f} <span style="font-size:0.9rem; font-weight:normal;">Mbps</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Network Health & Technical Audio Diagnostics Section -->
+    <div class="diagnostics-card" style="background-color: var(--surface-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem; margin-top: 2rem;">
+        <h3 style="margin-bottom: 0.5rem; font-size: 1.2rem; color: #a5b4fc;">Network Health & Audio Diagnostics</h3>
+        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1.25rem;">Technical evaluation of network stability (latency, jitter, packet loss) and audio codec browser playability matrix.</p>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem;">
+            <div style="background-color: rgba(255,255,255,0.02); padding: 1.25rem; border-radius: 8px; border: 1px solid var(--border-color);">
+                <h4 style="font-size: 0.95rem; color: var(--text-main); margin-bottom: 0.75rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">Audio Codec Matrix</h4>
+                <ul style="list-style: none; font-size: 0.85rem; color: var(--text-secondary);">
+                    <li style="margin-bottom: 0.5rem;"><b style="color:var(--success);">AAC Codec:</b> Native HTML5 browser playback ready without audio transcoding.</li>
+                    <li style="margin-bottom: 0.5rem;"><b style="color:var(--warning);">PCMA/PCMU (G.711):</b> Native NVR recording ready; requires WebRTC / RTSP proxy (e.g. go2rtc) for direct web audio.</li>
+                    <li><b style="color:var(--text-secondary);">G.726 / Other:</b> Specialized CCTV audio codec; recommended to re-encode to AAC for mobile clients.</li>
+                </ul>
+            </div>
+            <div style="background-color: rgba(255,255,255,0.02); padding: 1.25rem; border-radius: 8px; border: 1px solid var(--border-color);">
+                <h4 style="font-size: 0.95rem; color: var(--text-main); margin-bottom: 0.75rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">Network Stability Thresholds</h4>
+                <ul style="list-style: none; font-size: 0.85rem; color: var(--text-secondary);">
+                    <li style="margin-bottom: 0.5rem;"><b style="color:var(--success);">Ping Latency (<10ms):</b> Optimal local LAN response time for PTZ and instant stream start.</li>
+                    <li style="margin-bottom: 0.5rem;"><b style="color:var(--warning);">Jitter (>15ms):</b> High variance; may cause RTSP socket buffering or dropped keyframes.</li>
+                    <li><b style="color:var(--error);">Packet Loss (>2%):</b> Causes visible H.264/H.265 grey artifacts or stream disconnections.</li>
+                </ul>
+            </div>
+            <div style="background-color: rgba(255,255,255,0.02); padding: 1.25rem; border-radius: 8px; border: 1px solid var(--border-color);">
+                <h4 style="font-size: 0.95rem; color: var(--text-main); margin-bottom: 0.75rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">ONVIF Features & Capabilities</h4>
+                <ul style="list-style: none; font-size: 0.85rem; color: var(--text-secondary);">
+                    <li style="margin-bottom: 0.5rem;"><b style="color:#38bdf8;">PTZ Motor Control:</b> Allows motorized Pan-Tilt-Zoom positioning and preset navigation via ONVIF SOAP.</li>
+                    <li style="margin-bottom: 0.5rem;"><b style="color:#38bdf8;">ONVIF Event Alarms:</b> Pull-point / WS-BaseNotification event subscription for AI motion and I/O triggers.</li>
+                    <li><b style="color:var(--success);">GetSnapshotUri:</b> Enables direct JPEG frame grab without decoding full RTSP video streams.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Integration Snippets Section -->
+    <div class="snippets-card" style="background-color: var(--surface-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem; margin-top: 2rem;">
+        <h3 style="margin-bottom: 0.5rem; font-size: 1.2rem; color: #a5b4fc;">NVR & Home Automation Integration Snippets</h3>
+        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1.25rem;">Copy-paste ready configurations generated from active camera scan parameters.</p>
+        
+        <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+            <button class="tab-btn active" onclick="showSnippetTab('ha', this)">Home Assistant</button>
+            <button class="tab-btn" onclick="showSnippetTab('frigate', this)">Frigate NVR</button>
+            <button class="tab-btn" onclick="showSnippetTab('shinobi', this)">Shinobi NVR</button>
+            <button class="tab-btn" onclick="showSnippetTab('vlc', this)">VLC Direct Streams</button>
+        </div>
+
+        <div id="tab-ha" class="snippet-content" style="display:block;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                <span style="font-size:0.85rem; color:var(--text-secondary);">Add to your Home Assistant <code>configuration.yaml</code>:</span>
+                <button class="btn" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="copySnippetCode('code-ha', this)">Copy Code</button>
+            </div>
+            <pre id="code-ha" style="background-color: #0b0d10; padding:1rem; border-radius:8px; font-family:'JetBrains Mono', monospace; font-size:0.8rem; overflow-x:auto; max-height:300px; color:#e2e8f0;">{ha_yaml}</pre>
+        </div>
+
+        <div id="tab-frigate" class="snippet-content" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                <span style="font-size:0.85rem; color:var(--text-secondary);">Add to your <code>frigate.yml</code> configuration:</span>
+                <button class="btn" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="copySnippetCode('code-frigate', this)">Copy Code</button>
+            </div>
+            <pre id="code-frigate" style="background-color: #0b0d10; padding:1rem; border-radius:8px; font-family:'JetBrains Mono', monospace; font-size:0.8rem; overflow-x:auto; max-height:300px; color:#e2e8f0;">{frigate_yaml}</pre>
+        </div>
+
+        <div id="tab-shinobi" class="snippet-content" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                <span style="font-size:0.85rem; color:var(--text-secondary);">Import into Shinobi NVR (JSON configuration):</span>
+                <button class="btn" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="copySnippetCode('code-shinobi', this)">Copy Code</button>
+            </div>
+            <pre id="code-shinobi" style="background-color: #0b0d10; padding:1rem; border-radius:8px; font-family:'JetBrains Mono', monospace; font-size:0.8rem; overflow-x:auto; max-height:300px; color:#e2e8f0;">{shinobi_json}</pre>
+        </div>
+
+        <div id="tab-vlc" class="snippet-content" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                <span style="font-size:0.85rem; color:var(--text-secondary);">Open directly in VLC Media Player (Network Stream):</span>
+                <button class="btn" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="copySnippetCode('code-vlc', this)">Copy Code</button>
+            </div>
+            <pre id="code-vlc" style="background-color: #0b0d10; padding:1rem; border-radius:8px; font-family:'JetBrains Mono', monospace; font-size:0.8rem; overflow-x:auto; max-height:300px; color:#e2e8f0;">{vlc_links}</pre>
+        </div>
+    </div>
+
     <!-- Repository Credit Footer -->
     <footer style="margin-top: 2.5rem; padding: 1.5rem 0; border-top: 1px solid var(--border-color); text-align: center; color: var(--text-secondary); font-size: 0.85rem;">
         Powered by <a href="https://github.com/flashbsb/camminer" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-weight: 600;">CamMiner</a> &mdash; Open Source IP Camera Discovery &amp; Analysis Utility.
@@ -950,6 +1159,27 @@ def export_html(output_path, camera_reports, perf_reports=None):
     </div>
 
     <script>
+        function showSnippetTab(tabId, btnEl) {{
+            document.querySelectorAll('.snippet-content').forEach(el => el.style.display = 'none');
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            const target = document.getElementById('tab-' + tabId);
+            if (target) target.style.display = 'block';
+            if (btnEl) btnEl.classList.add('active');
+        }}
+
+        function copySnippetCode(elementId, btnEl) {{
+            const codeEl = document.getElementById(elementId);
+            if (!codeEl) return;
+            navigator.clipboard.writeText(codeEl.innerText).then(() => {{
+                const originalText = btnEl.innerText;
+                btnEl.innerText = "Copied!";
+                btnEl.style.backgroundColor = "#10b981";
+                setTimeout(() => {{
+                    btnEl.innerText = originalText;
+                    btnEl.style.backgroundColor = "";
+                }}, 1500);
+            }});
+        }}
         function openMediaModal(src, type) {{
             const overlay = document.getElementById('mediaModalOverlay');
             const container = document.getElementById('mediaModalContainer');

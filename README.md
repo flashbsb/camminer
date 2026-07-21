@@ -64,11 +64,15 @@ flowchart TD
 ## Features
 
 - **Automated Dependency Pre-Checks**: Validates Python 3.8+, required standard library modules, and system binaries (`ffmpeg`, `ffprobe`, `ping`) on startup, guiding users on missing dependencies.
-- **Concurrent Multi-Protocol Scanning**: Discover cameras concurrently using WS-Discovery (multicast UDP) and TCP port scanning (`ThreadPoolExecutor`).
+- **Concurrent Multi-Protocol Scanning & Discovery**: Discover cameras concurrently using ONVIF WS-Discovery (multicast UDP 3702), SSDP/UPnP multicast (UDP 1900), and parallel TCP port scanning (`ThreadPoolExecutor`).
+- **Vendor Identification via MAC OUI & UPnP**: Identifies camera manufacturers (Hikvision, Dahua, Intelbras, Reolink, Axis, Bosch, Hanwha, Uniview, TP-Link, Foscam, Vivotek, etc.) via MAC OUI lookup and SSDP headers.
+- **Native Cross-Platform & Windows Compatibility**: Enables VT100/ANSI console colors on Windows via Win32 API (`ctypes`), suppresses popup background command windows (`CREATE_NO_WINDOW`), and handles multilingual `ping.exe` output (English and Portuguese).
 - **Fast Raw Socket RTSP Probing**: Brute forces RTSP URLs using lightweight socket-level `DESCRIBE` requests in milliseconds, only running `ffprobe` on confirmed working streams.
 - **RTSP Digest Authentication Support**: Custom challenge-response algorithm handles Basic/Digest RTSP challenges natively.
 - **Open-ONVIF Credential Fallback**: If a camera has open ONVIF endpoints but locks the RTSP stream, the prober automatically brute-forces the RTSP stream using user credentials and embeds the working set.
 - **ONVIF GetSnapshotUri Resolution**: Resolves and maps camera snapshot URLs (HTTP) and profile tokens.
+- **Advanced Audio & Storage Diagnostics**: Identifies native browser audio codecs (AAC) vs NVR codecs (PCMA/PCMU G.711, G.726), detects PTZ / Event capabilities, and calculates estimated daily storage consumption (GB/day).
+- **One-Click NVR & Home Automation Integration Snippets**: Generates copy-paste ready YAML and JSON configuration snippets for **Home Assistant**, **Frigate NVR**, **Shinobi NVR**, and **VLC Direct Streams**.
 - **Default Performance Suite (`--no-perf`)**: Ping statistics (latency, loss, jitter) and stream throughput testing are enabled by default.
 - **Automated Media Captures (`--no-image` / `--no-video`)**: Automatically captures single-frame `.jpg` snapshots and records short `.mp4` video clips from active streams in parallel.
 - **Responsive HTML Lightbox Modal**: Interactive snapshot image thumbnails and inline video previews in HTML dashboard reports expand to `90vw x 90vh` on click without cropping.
@@ -115,6 +119,9 @@ Configurations are stored inside the `config/` directory:
 3. **`config/user.cfg`**:
    - List of credentials (format `username:password`) tested for ONVIF and RTSP access.
 
+4. **`config/mac.cfg`**:
+   - List of MAC address OUI prefixes (e.g. `00:12:33 = Hikvision/OEM`) for hardware manufacturer identification.
+
 ---
 
 ## Usage
@@ -122,6 +129,11 @@ Configurations are stored inside the `config/` directory:
 ### Run a Standard Full Scan (Probing, Performance & Media Capture):
 ```bash
 ./camminer.py
+```
+
+### Run with Custom Config Files:
+```bash
+./camminer.py -c config/scan.cfg -u config/user.cfg -m config/mac.cfg -o output_directory/
 ```
 
 ### Run with Verbose Console Output & Timestamped File Logging:
@@ -149,6 +161,7 @@ Configurations are stored inside the `config/` directory:
 ./camminer.py \
   -c ../custom_scan.cfg \
   -u ../custom_user.cfg \
+  -m ../custom_mac.cfg \
   -s ../custom_settings.json \
   -o ../output_reports_dir/ \
   --verbose \

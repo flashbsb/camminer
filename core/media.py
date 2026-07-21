@@ -5,6 +5,16 @@ import urllib.request
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+def _get_sp_kwargs():
+    kwargs = {}
+    if os.name == 'nt':
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        kwargs['startupinfo'] = startupinfo
+        if hasattr(subprocess, 'CREATE_NO_WINDOW'):
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+    return kwargs
+
 def build_authenticated_url(url, user, pwd):
     if not url or not user or "@" in url:
         return url
@@ -26,6 +36,7 @@ def capture_single_image(ip, stream_url, snapshot_url, media_dir, username=None,
     filename = f"snapshot_{ip.replace('.', '_')}{ts_suffix}.jpg"
     filepath = os.path.join(media_dir, filename)
     rel_path = os.path.join("media", filename)
+    sp_kwargs = _get_sp_kwargs()
 
     # Prepare credentials candidate list: [(username, password), ...]
     creds_to_try = []
@@ -52,7 +63,7 @@ def capture_single_image(ip, stream_url, snapshot_url, media_dir, username=None,
                 filepath
             ]
             try:
-                subprocess.run(cmd_extract, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5.0)
+                subprocess.run(cmd_extract, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5.0, **sp_kwargs)
                 if os.path.exists(filepath) and os.path.getsize(filepath) > 500:
                     return rel_path
             except Exception:
@@ -110,7 +121,7 @@ def capture_single_image(ip, stream_url, snapshot_url, media_dir, username=None,
                 filepath
             ]
             try:
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6.0)
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6.0, **sp_kwargs)
                 if os.path.exists(filepath) and os.path.getsize(filepath) > 500:
                     return rel_path
             except Exception:
@@ -132,6 +143,7 @@ def capture_single_video(ip, stream_url, media_dir, username=None, password=None
     filename = f"clip_{ip.replace('.', '_')}{ts_suffix}.mp4"
     filepath = os.path.join(media_dir, filename)
     rel_path = os.path.join("media", filename)
+    sp_kwargs = _get_sp_kwargs()
 
     exec_timeout = float(duration) + 5.0
     stimeout_us = str(int(ffmpeg_socket_timeout * 1000000))
@@ -161,7 +173,7 @@ def capture_single_video(ip, stream_url, media_dir, username=None, password=None
             filepath
         ]
         try:
-            subprocess.run(cmd_copy, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=exec_timeout)
+            subprocess.run(cmd_copy, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=exec_timeout, **sp_kwargs)
             if os.path.exists(filepath) and os.path.getsize(filepath) > 1000:
                 return rel_path
         except Exception:
@@ -181,7 +193,7 @@ def capture_single_video(ip, stream_url, media_dir, username=None, password=None
             filepath
         ]
         try:
-            subprocess.run(cmd_transcode, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=exec_timeout + 3.0)
+            subprocess.run(cmd_transcode, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=exec_timeout + 3.0, **sp_kwargs)
             if os.path.exists(filepath) and os.path.getsize(filepath) > 1000:
                 return rel_path
         except Exception:

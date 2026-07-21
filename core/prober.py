@@ -12,6 +12,7 @@ import re
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from core.logger import logger
+from core.scanner import get_mac_address, lookup_mac_vendor
 
 # Set global default socket timeout to prevent indefinite urllib or socket hangs
 socket.setdefaulttimeout(4.0)
@@ -198,6 +199,28 @@ def is_valid_sdp(sdp_text):
     lower_text = sdp_text.lower()
     return "m=video" in lower_text or "a=rtpmap" in lower_text
 
+def normalize_stream_path(url):
+    """
+    Normalizes an RTSP URL by removing host, port, credentials, and replacing embedded credentials
+    (e.g., user=xxx_password=yyy) with placeholders to compare actual stream endpoints (channel, stream/subtype).
+    """
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url)
+        path = parsed.path
+        if parsed.query:
+            path += "?" + parsed.query
+            
+        # Replace embedded user/password credentials in path/query with placeholders
+        path = re.sub(r'user=[^&_]+', 'user={user}', path, flags=re.IGNORECASE)
+        path = re.sub(r'password=[^&_]+', 'password={pwd}', path, flags=re.IGNORECASE)
+        path = re.sub(r'username=[^&_]+', 'username={user}', path, flags=re.IGNORECASE)
+        path = re.sub(r'pass=[^&_]+', 'pass={pwd}', path, flags=re.IGNORECASE)
+        return path
+    except Exception:
+        return url
+
 def parse_sdp_metadata(sdp_text):
     """
     Parses video codec, framerate, and audio codec from an SDP body.
@@ -326,11 +349,16 @@ class CameraProber:
             socket.setdefaulttimeout(settings.socket_timeout)
         
         # Discovered information
-        self.manufacturer = "Unknown"
+        self.mac_address = get_mac_address(self.ip)
+        self.mac_vendor = lookup_mac_vendor(self.mac_address)
+        self.manufacturer = self.mac_vendor if self.mac_vendor else "Unknown"
         self.model = "Generic IP Camera"
         self.firmware = "Unknown"
         self.auth_success = None  # (username, password)
         self.onvif_endpoint = None
+        self.has_ptz = False
+        self.has_events = False
+        self.est_storage_gb_day = 0.0
         self.streams = {}  # type -> {url: "", resolution: "", codec: "", fps: 0, etc.}
 
     def probe(self):
@@ -428,9 +456,17 @@ class CameraProber:
                     model_elems = find_xml_elements(root, "Model")
                     fw_elems = find_xml_elements(root, "FirmwareVersion")
                     
-                    if manufacturer_elems: self.manufacturer = manufacturer_elems[0].text
-                    if model_elems: self.model = model_elems[0].text
-                    if fw_elems: self.firmware = fw_elems[0].text
+                    if manufacturer_elems and manufacturer_elems[0].text:
+                        m_text = manufacturer_elems[0].text.strip()
+                        if m_text.lower() in ["ipcam", "generic", "camera", "unknown", "n/a", "nvt"] and self.mac_vendor and self.mac_vendor != "Unknown":
+                            self.manufacturer = f"{self.mac_vendor} ({m_text})"
+                        else:
+                            self.manufacturer = m_text
+                    elif self.mac_vendor and self.mac_vendor != "Unknown":
+                        self.manufacturer = self.mac_vendor
+
+                    if model_elems and model_elems[0].text: self.model = model_elems[0].text
+                    if fw_elems and fw_elems[0].text: self.firmware = fw_elems[0].text
                     
                     cred_desc = f"'{user}:{pwd}'" if user is not None else "No Authentication"
                     print(f"  [+] ONVIF Auth successful using {cred_desc}")
@@ -450,7 +486,7 @@ class CameraProber:
           <s:Header>{sec_header}</s:Header>
           <s:Body xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
             <tds:GetCapabilities>
-              <tds:Category>Media</tds:Category>
+              <tds:Category>All</tds:Category>
             </tds:GetCapabilities>
           </s:Body>
         </s:Envelope>
@@ -460,8 +496,15 @@ class CameraProber:
             try:
                 root = ET.fromstring(res)
                 media_elems = find_xml_elements(root, "XAddr")
-                if media_elems:
-                    media_service_url = media_elems[0].text
+                for elem in media_elems:
+                    url_text = elem.text or ""
+                    url_lower = url_text.lower()
+                    if "media" in url_lower and not media_service_url:
+                        media_service_url = url_text
+                    if "ptz" in url_lower:
+                        self.has_ptz = True
+                    if "event" in url_lower:
+                        self.has_events = True
             except Exception:
                 pass
                 
@@ -485,9 +528,15 @@ class CameraProber:
                     for srv in services:
                         namespace = find_xml_elements(srv, "Namespace")
                         xaddr = find_xml_elements(srv, "XAddr")
-                        if namespace and xaddr and "media" in namespace[0].text.lower():
-                            media_service_url = xaddr[0].text
-                            break
+                        ns_str = namespace[0].text.lower() if namespace else ""
+                        xa_str = xaddr[0].text if xaddr else ""
+                        xa_lower = xa_str.lower()
+                        if ("media" in ns_str or "media" in xa_lower) and not media_service_url:
+                            media_service_url = xa_str
+                        if "ptz" in ns_str or "ptz" in xa_lower:
+                            self.has_ptz = True
+                        if "event" in ns_str or "event" in xa_lower:
+                            self.has_events = True
                 except Exception:
                     pass
 
@@ -560,6 +609,27 @@ class CameraProber:
                                 if verified_url:
                                     rtsp_url = verified_url
                                     self.auth_success = working_cred
+
+                            # Check for duplicate normalized stream path across ONVIF profiles
+                            norm_new = normalize_stream_path(rtsp_url)
+                            if "main" in self.streams:
+                                norm_main = normalize_stream_path(self.streams["main"]["url"])
+                                if norm_new and norm_new == norm_main:
+                                    # Try deriving real substream endpoint (stream=0 -> stream=1, ch00_1 -> ch00_2, etc.)
+                                    sub_cand = re.sub(r'stream=0', 'stream=1', rtsp_url, flags=re.IGNORECASE)
+                                    sub_cand = re.sub(r'subtype=0', 'subtype=1', sub_cand, flags=re.IGNORECASE)
+                                    sub_cand = re.sub(r'ch00_1', 'ch00_2', sub_cand, flags=re.IGNORECASE)
+                                    sub_cand = re.sub(r'Channels/101', 'Channels/102', sub_cand, flags=re.IGNORECASE)
+                                    sub_cand = re.sub(r'Channels/1\b', 'Channels/2', sub_cand, flags=re.IGNORECASE)
+
+                                    if sub_cand != rtsp_url:
+                                        status_cand, _, _ = verify_rtsp_url_raw(sub_cand, timeout=1.0)
+                                        if status_cand == "valid":
+                                            rtsp_url = sub_cand
+                                        else:
+                                            continue
+                                    else:
+                                        continue
                                     
                             # Request Snapshot URI
                             soap_snapshot = f"""
@@ -657,6 +727,14 @@ class CameraProber:
  
     def add_brute_forced_stream(self, rtsp_url, credentials, sdp_text=None):
         self.auth_success = credentials
+        norm_new = normalize_stream_path(rtsp_url)
+
+        # Check if this exact RTSP stream path is already registered
+        for s_key, s_data in self.streams.items():
+            norm_exist = normalize_stream_path(s_data["url"])
+            if norm_new and norm_new == norm_exist:
+                return False
+
         stype = "main" if len(self.streams) == 0 else f"substream_{len(self.streams)}"
         if len(self.streams) == 1:
             stype = "substream"
@@ -676,6 +754,7 @@ class CameraProber:
         user, pwd = credentials
         cred_desc = f"'{user}:{pwd}'" if user else "No Authentication"
         print(f"    [+] Found working RTSP stream at: {rtsp_url} using {cred_desc}")
+        return True
 
     def verify_rtsp_url_ffprobe(self, rtsp_url, timeout=2.5):
         """
@@ -808,8 +887,9 @@ class CameraProber:
                 if success:
                     working_creds.append((user, pwd))
                     
-            # For each working credential, find the streams
-            for user, pwd in working_creds:
+            # Use primary working credential pair to discover all candidate streams
+            if working_creds:
+                user, pwd = working_creds[0]
                 is_wildcard = self.is_wildcard_server(port, user, pwd)
                 
                 for path_template, www_auth in candidate_paths:
@@ -852,6 +932,31 @@ class CameraProber:
                     future.result()
                 except Exception as e:
                     print(f"    [-] Stream analysis error for {name}: {e}", file=sys.stderr)
+
+        # Post-analysis: Ensure stream resolution hierarchy (main = highest resolution, substream = secondary)
+        if "main" in self.streams and "substream" in self.streams:
+            m_info = self.streams["main"]
+            s_info = self.streams["substream"]
+            
+            # Check for identical normalized URL paths
+            path_m = normalize_stream_path(m_info["url"])
+            path_s = normalize_stream_path(s_info["url"])
+            
+            if path_m and path_m == path_s:
+                del self.streams["substream"]
+            else:
+                def parse_res_pixels(res_str):
+                    try:
+                        w, h = res_str.lower().split("x")
+                        return int(w) * int(h)
+                    except Exception:
+                        return 0
+                        
+                m_pixels = parse_res_pixels(m_info.get("resolution", ""))
+                s_pixels = parse_res_pixels(s_info.get("resolution", ""))
+                
+                if s_pixels > m_pixels > 0:
+                    self.streams["main"], self.streams["substream"] = s_info, m_info
 
     def analyze_single_stream(self, name):
         """
@@ -983,6 +1088,59 @@ class CameraProber:
             if "h265" in sub_codec or "hevc" in sub_codec:
                 recommendations.append("[Performance Warning] Substream uses H.265. Home Assistant dashboard cards might experience lag or require transcoding.")
 
+        # Audio Codec Diagnostic
+        main_audio = main_stream.get("audio", "Unknown") if main_stream else "Unknown"
+        sub_audio = sub_stream.get("audio", "Unknown") if sub_stream else "Unknown"
+        combined_audio = f"{main_audio} {sub_audio}".upper()
+        if "AAC" in combined_audio:
+            recommendations.append("[Audio Note] Camera audio uses AAC (native HTML5 browser and NVR support).")
+        elif any(ac in combined_audio for ac in ["PCMA", "PCMU", "G711", "G.711", "G726", "PCM", "ALAW", "MULAW"]):
+            recommendations.append("[Audio Note] Audio codec 'PCMA/PCMU (G.711)' detected. Safe for NVR recording, but requires WebRTC / RTSP proxy (e.g. go2rtc) for direct HTML5 browser audio.")
+
+        # Estimate Storage Requirements (GB/day)
+        est_gb_day = 0.0
+        if main_stream:
+            res = main_stream.get("resolution", "").lower()
+            codec = main_stream.get("codec", "").lower()
+            
+            # Realistic CCTV VBR stream bitrates (Mbps)
+            est_mbps = 2.0
+            if "3840" in res or "4k" in res or "2160" in res:
+                est_mbps = 4.0 if ("h265" in codec or "hevc" in codec) else 7.0
+            elif "2560" in res or "2k" in res or "1440" in res:
+                est_mbps = 2.5 if ("h265" in codec or "hevc" in codec) else 4.0
+            elif "1920" in res or "1080" in res:
+                est_mbps = 1.5 if ("h265" in codec or "hevc" in codec) else 2.2
+            elif "1280" in res or "720" in res:
+                est_mbps = 0.8 if ("h265" in codec or "hevc" in codec) else 1.2
+            elif any(s in res for s in ["640", "352", "288", "480", "cif", "qcif", "d1"]):
+                est_mbps = 0.3 if ("h265" in codec or "hevc" in codec) else 0.5
+
+            # Accurate conversion: 1 Mbps = (1,000,000 * 86,400) / (8 * 1,000,000,000) = 10.8 GB/day
+            est_gb_day = round(est_mbps * 10.8, 1)
+            recommendations.append(f"[Storage Estimate] Main stream ({main_stream.get('resolution')}) consumes ~{est_gb_day} GB/day (~{est_mbps} Mbps) for continuous NVR recording.")
+
+        sub_gb_day = 0.0
+        if sub_stream:
+            sub_res = sub_stream.get("resolution", "").lower()
+            sub_codec = sub_stream.get("codec", "").lower()
+            sub_mbps = 0.3 if ("h265" in sub_codec or "hevc" in sub_codec) else 0.5
+            if "1280" in sub_res or "720" in sub_res:
+                sub_mbps = 0.8 if ("h265" in sub_codec or "hevc" in sub_codec) else 1.2
+            elif "1920" in sub_res or "1080" in sub_res:
+                sub_mbps = 1.5 if ("h265" in sub_codec or "hevc" in sub_codec) else 2.2
+
+            sub_gb_day = round(sub_mbps * 10.8, 1)
+            recommendations.append(f"[Storage Estimate] Substream ({sub_stream.get('resolution')}) adds ~{sub_gb_day} GB/day (~{sub_mbps} Mbps) if dual-stream recording is enabled.")
+
+        self.est_storage_gb_day = est_gb_day
+        self.est_sub_storage_gb_day = sub_gb_day
+
+        if getattr(self, "has_ptz", False):
+            recommendations.append("[ONVIF Feature] PTZ (Pan-Tilt-Zoom) motor control supported.")
+        if getattr(self, "has_events", False):
+            recommendations.append("[ONVIF Feature] ONVIF Events & Alarm Subscription supported.")
+
         if score >= 90:
             recommendations.append("[Success] Excellent compatibility. Ready for NVR and Home Assistant deployment.")
         elif score >= 70:
@@ -1002,12 +1160,17 @@ class CameraProber:
         
         return {
             "ip": self.ip,
+            "mac_address": getattr(self, "mac_address", None) or "N/A",
+            "mac_vendor": getattr(self, "mac_vendor", None) or "N/A",
             "manufacturer": self.manufacturer,
             "model": self.model,
             "firmware": self.firmware,
             "username": user_str,
             "password": pwd_str,
             "onvif_endpoint": self.onvif_endpoint or "N/A",
+            "has_ptz": getattr(self, "has_ptz", False),
+            "has_events": getattr(self, "has_events", False),
+            "est_storage_gb_day": getattr(self, "est_storage_gb_day", 0.0),
             "streams": self.streams,
             "nvr_score": score,
             "recommendations": recs

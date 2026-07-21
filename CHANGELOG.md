@@ -5,6 +5,33 @@ All notable changes to the **CamMiner** project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-07-21
+
+### Added
+- **User-Editable MAC OUI Configuration (`config/mac.cfg`, `core/scanner.py`, `core/config.py`)**:
+  - Extracted hardware OUI vendor mappings to `config/mac.cfg` allowing users to inspect and add custom MAC prefixes and manufacturers without modifying code.
+  - Added `-m` / `--mac-cfg` CLI parameter to specify custom MAC config file locations.
+  - Implemented non-blocking online OUI lookup fallback (`lookup_mac_vendor_online`) using `api.macvendors.com` with a 1.2s timeout for unlisted local MACs.
+- **Dynamic Stream Storage & Bandwidth Recalibration (`core/prober.py`, `core/performance.py`)**:
+  - Calibrated default NVR storage estimates to realistic CFTV VBR profiles ($1.0 \text{ Mbps} = 10.8 \text{ GB/day}$).
+  - Integrated live stream throughput measurement from Stage 3 performance tests to dynamically recalibrate daily storage consumption based on real-time Mbps per camera.
+- **Hardware Vendor Identification & Enrichment (`core/scanner.py`, `core/prober.py`)**: Added cross-platform system ARP table query (`get_mac_address()`) and combined generic ONVIF responses with resolved MAC vendors (e.g. rendering `"Hikvision (IPCAM)"`).
+- **SSDP / UPnP Multicast Discovery (`core/scanner.py`)**: Integrated SSDP multicast HTTP M-SEARCH (`239.255.255.250:1900`) discovery into Stage 1 alongside ONVIF WS-Discovery.
+- **Native Windows OS Compatibility (`camminer.py`, `core/logger.py`, `core/media.py`, `core/performance.py`, `core/prober.py`)**:
+  - Activated Win32 API VT100/ANSI console colors (`SetConsoleMode`) on Windows CMD / PowerShell via `ctypes`.
+  - Injected `STARTF_USESHOWWINDOW` and `CREATE_NO_WINDOW` flags into all `subprocess.run` calls, preventing background `cmd.exe` / `ffmpeg` windows from popping up on Windows.
+  - Added multilingual regex support to `test_network_ping()` handling English and Portuguese `ping.exe` output (`Average`/`Média`, `Lost`/`Perdidos`, `time`/`tempo`).
+- **NVR & Home Automation Integration Snippets (`core/exporter.py`)**: Added an interactive tabbed code generator to the HTML report rendering copy-paste ready configurations for **Home Assistant**, **Frigate NVR**, **Shinobi NVR**, and **VLC Direct Streams** with instant clipboard copying.
+- **Advanced Audio & Network Stability Diagnostics (`core/exporter.py`, `core/prober.py`)**: Added audio stream classification (detecting native browser AAC vs NVR PCMA/PCMU G.711 / G.726), ONVIF PTZ & Events service detection, and network jitter/packet loss diagnostic cards in HTML reports.
+
+### Fixed
+- **RTSP Stream Path Deduplication & Resolution Hierarchy (`core/prober.py`)**:
+  - Added URL path normalization and deduplication in `add_brute_forced_stream()`, preventing duplicate RTSP stream entries when cameras accept multiple credential pairs.
+  - Optimized `brute_force_rtsp()` to probe all candidate RTSP paths using the primary valid credential set, eliminating cross-password stream misclassification.
+  - Added post-analysis resolution hierarchy sorting in `analyze_discovered_streams()` to guarantee the highest-resolution stream is assigned to Main Stream and secondary streams to Substream.
+
+---
+
 ## [1.6.2] - 2026-07-19
 
 ### Fixed

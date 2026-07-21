@@ -9,6 +9,7 @@ class Config:
         self.settings_path = "config/settings.json"
         self.scan_cfg_path = "config/scan.cfg"
         self.user_cfg_path = "config/user.cfg"
+        self.mac_cfg_path = "config/mac.cfg"
         self.output_dir = "infos"
         
         self.timeout = 3.0
@@ -57,6 +58,11 @@ class Config:
             "-u", "--user-cfg",
             default=self.user_cfg_path,
             help=f"Path to user.cfg (default: {self.user_cfg_path})"
+        )
+        parser.add_argument(
+            "-m", "--mac-cfg",
+            default=self.mac_cfg_path,
+            help=f"Path to mac.cfg (default: {self.mac_cfg_path})"
         )
         parser.add_argument(
             "-o", "--output-dir",
@@ -118,6 +124,7 @@ class Config:
         self.settings_path = args.settings
         self.scan_cfg_path = args.scan_cfg
         self.user_cfg_path = args.user_cfg
+        self.mac_cfg_path = args.mac_cfg
         self.run_scan = not args.no_scan
         self.run_perf = not args.no_perf
         self.run_image = not args.no_image

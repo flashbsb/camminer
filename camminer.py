@@ -13,13 +13,13 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.config import Config
 from core.logger import Logger, Colors
-from core.scanner import ws_discover, scan_hosts
+from core.scanner import ws_discover, ssdp_discover, scan_hosts, load_mac_vendor_map
 from core.prober import probe_cameras
 from core.performance import run_performance_suite
 from core.media import generate_media_assets
 from core.exporter import format_terminal_table, export_csv, export_html, export_json, update_index_html
 
-__version__ = "1.6.2"
+__version__ = "1.7.0"
 
 def check_dependencies():
     """
@@ -48,7 +48,10 @@ def check_dependencies():
     # 3. System binaries check
     required_binaries = ["ffmpeg", "ffprobe", "ping"]
     for binary in required_binaries:
-        if shutil.which(binary) is None:
+        found = shutil.which(binary)
+        if not found and os.name == 'nt':
+            found = shutil.which(f"{binary}.exe")
+        if found is None:
             missing_deps.append(f"System binary '{binary}' (Not found in PATH)")
             
     if missing_deps:
@@ -116,22 +119,26 @@ def main():
         log.info("Scan disabled via --no-scan flag. Exiting.")
         return
         
-    # STAGE 1: Network & WS-Discovery
+    # Load custom MAC OUI mappings if configured
+    load_mac_vendor_map(config.mac_cfg_path)
+    
+    # STAGE 1: Network & WS-Discovery / SSDP
     log.stage(1, 5, "Network Discovery & Target Port Scanning")
     if not config.targets_overridden:
         discovered_ips = ws_discover(timeout=config.ws_discovery_timeout)
+        ssdp_ips = ssdp_discover(timeout=config.ws_discovery_timeout)
         
         # Merge discovered IPs into scan targets
         original_targets_count = len(config.targets)
-        for ip in discovered_ips:
+        for ip in discovered_ips + ssdp_ips:
             if ip not in config.targets:
                 config.targets.append(ip)
                 
         added_count = len(config.targets) - original_targets_count
         if added_count > 0:
-            log.success(f"Added {added_count} discovered ONVIF camera IP(s) to targets list.")
+            log.success(f"Added {added_count} discovered camera IP(s) (ONVIF/SSDP) to targets list.")
     else:
-        log.info("WS-Discovery disabled when active targets are explicitly specified via command line.")
+        log.info("WS-Discovery & SSDP disabled when active targets are explicitly specified via command line.")
         
     if not config.targets:
         log.warning("No scan targets specified in scan.cfg and none discovered via WS-Discovery. Exiting.")
